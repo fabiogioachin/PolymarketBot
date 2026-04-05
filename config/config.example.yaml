@@ -1,0 +1,121 @@
+app:
+  name: polymarket-bot
+  version: "0.1.0"
+  env: development
+  log_level: INFO
+  dry_run: true
+
+polymarket:
+  base_url: https://gamma-api.polymarket.com
+  clob_url: https://clob.polymarket.com
+  ws_url: wss://ws-subscriptions-clob.polymarket.com/ws/market
+  rate_limit: 10  # requests per second
+  retry_max: 3
+  retry_backoff: 1.0
+
+execution:
+  mode: dry_run  # dry_run | shadow | live
+  tick_interval_seconds: 60
+  shadow_mode: false
+
+risk:
+  max_exposure_pct: 50
+  max_single_position_eur: 5%
+  daily_loss_limit_eur: 15%
+  fixed_fraction_pct: 5
+  max_positions: 25
+  circuit_breaker:
+    consecutive_losses: 3
+    daily_drawdown_pct: 15
+    cooldown_minutes: 60
+
+valuation:
+  tick_interval_seconds: 120
+  weights:
+    base_rate: 0.15
+    rule_analysis: 0.15
+    microstructure: 0.20
+    cross_market: 0.10
+    event_signal: 0.15
+    pattern_kg: 0.10
+    temporal: 0.10
+    crowd_calibration: 0.05
+  thresholds:
+    min_edge: 0.05
+    min_confidence: 0.3
+    strong_edge: 0.15
+
+intelligence:
+  gdelt:
+    enabled: true
+    poll_interval_minutes: 15
+    watchlist:
+      themes:
+        - ELECTION
+        - ECON_INFLATION
+        - ECON_INTEREST_RATE
+        - CLIMATE_CHANGE
+        - WB_CONFLICT
+      actors:
+        - USA
+        - RUS
+        - CHN
+        - EU
+      countries:
+        - US
+        - RU
+        - CN
+        - UA
+        - IL
+  rss:
+    enabled: true
+    poll_interval_minutes: 30
+    feeds:
+      - name: Reuters World
+        url: https://feeds.reuters.com/Reuters/worldNews
+      - name: AP Top News
+        url: https://rsshub.app/apnews/topics/apf-topnews
+      - name: BBC World
+        url: https://feeds.bbci.co.uk/news/world/rss.xml
+      - name: Al Jazeera
+        url: https://www.aljazeera.com/xml/rss/all.xml
+  obsidian:
+    vault_path: "C:/Users/fgioa/OneDrive - SYNESIS CONSORTIUM/Desktop/PRO/_ObsidianKnowledge"
+    patterns_path: Projects/PolymarketBot/patterns
+    enabled: true
+
+strategies:
+  enabled:
+    - value_edge
+    - arbitrage
+    - rule_edge
+    - event_driven
+    - resolution
+  domain_filters:
+    value_edge: []      # all domains
+    arbitrage: []
+    rule_edge: []
+    event_driven:
+      - politics
+      - geopolitics
+      - economics
+    resolution:
+      - sports
+      - crypto
+
+telegram:
+  enabled: false
+  alert_rules:
+    - type: trade_executed
+      min_edge: 0.10
+    - type: circuit_breaker
+    - type: daily_summary
+
+llm:
+  enabled: false
+  triggers:
+    - anomaly
+    - new_market
+    - daily_digest
+  max_daily_calls: 20
+  model: claude-sonnet-4-6

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PolymarketBot Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────────────────── -->
+  <header>
+    <div class="header-left">
+      <span class="logo">PolymarketBot</span>
+      <div class="status-indicator">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="status-label">Loading...</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="status-indicator" id="sse-indicator">
+        <div class="status-dot" id="sse-dot"></div>
+        <span id="sse-label">Connecting...</span>
+      </div>
+      <span class="last-updated" id="last-updated"></span>
+    </div>
+  </header>
+
+  <!-- ── Navigation ─────────────────────────────────────────────── -->
+  <nav>
+    <button class="tab-btn active" data-tab="trading">Trading</button>
+    <button class="tab-btn" data-tab="config">Config</button>
+    <button class="tab-btn" data-tab="intelligence">Intelligence</button>
+    <button class="tab-btn" data-tab="knowledge">Knowledge</button>
+  </nav>
+
+  <!-- ── Main Content ───────────────────────────────────────────── -->
+  <main>
+
+    <!-- ── Trading Tab ───────────────────────────────────────────── -->
+    <div id="tab-trading" class="tab-content active">
+      <div id="error-trading" class="error-banner"></div>
+
+      <!-- Metrics overview -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">Total Trades</div>
+          <div class="metric-value neutral" id="m-total-trades">&mdash;</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Daily P&amp;L</div>
+          <div class="metric-value" id="m-daily-pnl">&mdash;</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Win Rate</div>
+          <div class="metric-value" id="m-win-rate">&mdash;</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Equity</div>
+          <div class="metric-value neutral" id="m-equity">&mdash;</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Open Positions</div>
+          <div class="metric-value neutral" id="m-positions">&mdash;</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Circuit Breaker</div>
+          <div class="metric-value" id="m-cb-status">&mdash;</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Tick Count</div>
+          <div class="metric-value neutral" id="m-tick-count">&mdash;</div>
+        </div>
+      </div>
+
+      <!-- Open Positions -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title">Open Positions</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>Strategy / Decision</th>
+                <th>Price</th>
+                <th>Size</th>
+                <th>P&amp;L</th>
+                <th>Edge</th>
+              </tr>
+            </thead>
+            <tbody id="positions-tbody">
+              <tr>
+                <td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px">
+                  Waiting for data...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="positions-total" style="text-align:right;padding-top:8px;font-size:13px;font-family:var(--font-mono);color:var(--text-secondary)"></div>
+      </div>
+
+      <!-- Trade log -->
+      <div class="card">
+        <div class="card-title">
+          Recent Trades
+          <span style="float:right;font-weight:400;text-transform:none;letter-spacing:0">
+            Total: <span id="trade-log-total">0</span>
+          </span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>Strategy</th>
+                <th>Size / P&amp;L</th>
+                <th>Edge / Reasoning</th>
+              </tr>
+            </thead>
+            <tbody id="trade-log-tbody">
+              <tr>
+                <td colspan="4" style="text-align:center;color:var(--text-muted);padding:20px">
+                  Waiting for data...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Config Tab ─────────────────────────────────────────────── -->
+    <div id="tab-config" class="tab-content">
+      <div id="error-config" class="error-banner"></div>
+
+      <div class="config-grid">
+
+        <!-- Strategies -->
+        <div class="card">
+          <div class="card-title">Enabled Strategies</div>
+          <div class="tag-list" id="cfg-strategies-enabled">
+            <span class="loading-text">Loading...</span>
+          </div>
+        </div>
+
+        <!-- Risk -->
+        <div class="card">
+          <div class="card-title">Risk Parameters</div>
+          <div id="cfg-risk-table">
+            <span class="loading-text">Loading...</span>
+          </div>
+        </div>
+
+        <!-- Valuation Weights -->
+        <div class="card">
+          <div class="card-title">Valuation Weights</div>
+          <div id="cfg-weights-table">
+            <span class="loading-text">Loading...</span>
+          </div>
+        </div>
+
+        <!-- Thresholds -->
+        <div class="card">
+          <div class="card-title">Valuation Thresholds</div>
+          <div id="cfg-thresholds-table">
+            <span class="loading-text">Loading...</span>
+          </div>
+        </div>
+
+        <!-- LLM -->
+        <div class="card">
+          <div class="card-title">LLM Configuration</div>
+          <div id="cfg-llm-table">
+            <span class="loading-text">Loading...</span>
+          </div>
+        </div>
+
+        <!-- Intelligence -->
+        <div class="card">
+          <div class="card-title">Intelligence Sources</div>
+          <div id="cfg-intel-table">
+            <span class="loading-text">Loading...</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Intelligence Tab ───────────────────────────────────────── -->
+    <div id="tab-intelligence" class="tab-content">
+      <div class="two-col">
+        <div class="card">
+          <div class="card-title">Event Timeline</div>
+          <div class="placeholder">
+            <div class="placeholder-icon">&#128240;</div>
+            Event timeline will appear here once the intelligence pipeline is active.
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">GDELT Anomalies</div>
+          <div class="placeholder">
+            <div class="placeholder-icon">&#128202;</div>
+            GDELT anomaly detection results will appear here.
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">RSS Feed Activity</div>
+        <div class="placeholder">
+          <div class="placeholder-icon">&#128279;</div>
+          RSS feed headlines and parsed signals will appear here.
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Knowledge Tab ──────────────────────────────────────────── -->
+    <div id="tab-knowledge" class="tab-content">
+      <div class="two-col">
+        <div class="card">
+          <div class="card-title">Risk Profiles</div>
+          <div class="placeholder">
+            <div class="placeholder-icon">&#9888;</div>
+            Market risk profiles from the Knowledge Base will appear here.
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Pattern Library</div>
+          <div class="placeholder">
+            <div class="placeholder-icon">&#128300;</div>
+            Historical patterns and their hit rates will appear here.
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Obsidian Knowledge Graph</div>
+        <div class="placeholder">
+          <div class="placeholder-icon">&#128218;</div>
+          Connected KG nodes from Obsidian will appear here.
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

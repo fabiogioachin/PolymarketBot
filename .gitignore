@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Type checking / linting / testing
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+
+# Data & databases
+*.db
+*.sqlite
+*.parquet
+data/
+
+# Frontend (if any)
+node_modules/
+static/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings (not project config)
+.claude/settings.local.json
