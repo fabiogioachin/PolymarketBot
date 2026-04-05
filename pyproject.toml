@@ -22,6 +22,7 @@ dependencies = [
     "python-telegram-bot",
     "aiofiles",
     "aiosqlite",
+    "scikit-learn",
 ]
 
 [dependency-groups]

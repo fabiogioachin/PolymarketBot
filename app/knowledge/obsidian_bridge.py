@@ -230,6 +230,65 @@ class ObsidianBridge:
         note.frontmatter["last_triggered"] = datetime.now(tz=UTC).isoformat()
         return await self.write_note(note)
 
+    async def write_divergence_event(
+        self,
+        polymarket_id: str,
+        manifold_id: str,
+        poly_price: float,
+        manifold_price: float,
+        divergence: float,
+        poly_question: str,
+        manifold_url: str,
+    ) -> bool:
+        """Write a cross-platform divergence event note."""
+        if not self._enabled:
+            return False
+        now = datetime.now(tz=UTC)
+        safe_id = polymarket_id[:60].replace("/", "-")
+        path = f"Projects/PolymarketBot/Events/cross_platform/{safe_id}.md"
+
+        direction = "manifold_higher" if divergence > 0 else "manifold_lower"
+        note = ObsidianNote(
+            path=path,
+            content=(
+                f"# Divergence: {poly_question[:80]}\n\n"
+                f"## Signal\n\n"
+                f"- Polymarket: {poly_price:.3f}\n"
+                f"- Manifold: {manifold_price:.3f}\n"
+                f"- Divergenza: {divergence:+.3f} ({direction})\n\n"
+                f"## Collegato a\n\n"
+                f"- [[Cross-Platform Divergence Signal]] — pattern\n"
+            ),
+            frontmatter={
+                "type": "event",
+                "event_type": "cross_platform_divergence",
+                "polymarket_id": polymarket_id,
+                "manifold_id": manifold_id,
+                "polymarket_prob": round(poly_price, 4),
+                "manifold_prob": round(manifold_price, 4),
+                "divergence": round(divergence, 4),
+                "direction": direction,
+                "manifold_url": manifold_url,
+                "detected_at": now.isoformat(),
+                "status": "active",
+                "created": now.strftime("%Y-%m-%d"),
+            },
+        )
+        return await self.write_note(note)
+
+    async def read_divergence_events(self) -> list[ObsidianNote]:
+        """Read active cross-platform divergence events from the vault."""
+        if not self._enabled:
+            return []
+        folder = "Projects/PolymarketBot/Events/cross_platform"
+        paths = await self.list_notes(folder)
+        notes: list[ObsidianNote] = []
+        for path in paths:
+            note = await self.read_note(path)
+            if note is not None:
+                notes.append(note)
+        return notes
+
     async def close(self) -> None:
         """Close the HTTP client."""
         if self._client and not self._client.is_closed:

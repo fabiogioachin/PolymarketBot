@@ -11,6 +11,7 @@ from app.models.knowledge import (
     PatternMatch,
     PatternStatus,
 )
+from app.models.manifold import CrossPlatformSignal
 
 logger = get_logger(__name__)
 
@@ -135,6 +136,31 @@ class KnowledgeService:
             domain_notes=domain_notes,
             composite_signal=round(signal, 4),
             confidence=round(confidence, 4),
+        )
+
+    async def record_divergence(
+        self,
+        signal: CrossPlatformSignal,
+        poly_question: str,
+        manifold_url: str,
+        *,
+        min_divergence: float = 0.10,
+    ) -> bool:
+        """Record a significant cross-platform divergence to the Obsidian vault.
+
+        Only writes if the absolute divergence exceeds min_divergence.
+        """
+        if abs(signal.divergence) < min_divergence:
+            return False
+
+        return await self._bridge.write_divergence_event(
+            polymarket_id=signal.polymarket_id,
+            manifold_id=signal.manifold_id,
+            poly_price=signal.poly_price,
+            manifold_price=signal.manifold_price,
+            divergence=signal.divergence,
+            poly_question=poly_question,
+            manifold_url=manifold_url,
         )
 
     async def write_event(

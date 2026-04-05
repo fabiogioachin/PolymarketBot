@@ -175,9 +175,16 @@ class ErrorStrategy:
 class FakeValueEngine:
     """Value engine that returns a fixed valuation for every market."""
 
+    def __init__(self) -> None:
+        self.last_external_signals: dict[str, dict[str, float | None]] | None = None
+
     async def assess_batch(
-        self, markets: list[Market], universe: list[Market] | None = None
+        self,
+        markets: list[Market],
+        universe: list[Market] | None = None,
+        external_signals: dict[str, dict[str, float | None]] | None = None,
     ) -> list[ValuationResult]:
+        self.last_external_signals = external_signals
         return [
             ValuationResult(
                 market_id=m.id,
@@ -391,3 +398,162 @@ class TestRunStop:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+
+
+# --- Manifold integration fakes ---
+
+
+class FakeCrossPlatformSignal:
+    """Minimal stand-in for CrossPlatformSignal with signal_value."""
+
+    def __init__(self, signal_value: float) -> None:
+        self.signal_value = signal_value
+
+
+class FakeManifoldService:
+    """Manifold service that returns deterministic signals for testing."""
+
+    def __init__(self, signals: dict[str, FakeCrossPlatformSignal] | None = None) -> None:
+        self._signals = signals or {}
+        self.call_count = 0
+
+    async def get_signals_batch(
+        self, markets: list[Market]
+    ) -> dict[str, FakeCrossPlatformSignal]:
+        self.call_count += 1
+        return self._signals
+
+
+class ErrorManifoldService:
+    """Manifold service that always raises."""
+
+    call_count: int = 0
+
+    async def get_signals_batch(
+        self, markets: list[Market]
+    ) -> dict[str, FakeCrossPlatformSignal]:
+        self.call_count += 1
+        raise RuntimeError("Manifold API unavailable")
+
+
+# --- Manifold integration tests ---
+
+
+class TestManifoldIntegration:
+    @pytest.mark.asyncio
+    async def test_manifold_signals_passed_to_value_engine(self) -> None:
+        """When manifold_service is provided, external_signals are forwarded to assess_batch."""
+        manifold_svc = FakeManifoldService(
+            signals={"mkt-1": FakeCrossPlatformSignal(signal_value=0.72)}
+        )
+        value_engine = FakeValueEngine()
+        engine = ExecutionEngine(
+            executor=FakeExecutor(),
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=_make_registry(),
+            value_engine=value_engine,
+            manifold_service=manifold_svc,
+        )
+        market = _make_market()
+
+        await engine.tick(markets=[market])
+
+        assert manifold_svc.call_count == 1
+        assert value_engine.last_external_signals is not None
+        assert "mkt-1" in value_engine.last_external_signals
+        assert value_engine.last_external_signals["mkt-1"]["cross_platform_signal"] == 0.72
+
+    @pytest.mark.asyncio
+    async def test_manifold_not_called_without_service(self) -> None:
+        """When manifold_service is None, no external signals are passed."""
+        value_engine = FakeValueEngine()
+        engine = ExecutionEngine(
+            executor=FakeExecutor(),
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=_make_registry(),
+            value_engine=value_engine,
+        )
+
+        await engine.tick(markets=[_make_market()])
+        # No external signals → assess_batch called with None
+        assert value_engine.last_external_signals is None
+
+    @pytest.mark.asyncio
+    async def test_manifold_respects_cadence(self) -> None:
+        """Manifold is polled once, then skipped until the cadence interval elapses."""
+        manifold_svc = FakeManifoldService(signals={})
+        engine = ExecutionEngine(
+            executor=FakeExecutor(),
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=_make_registry(),
+            value_engine=FakeValueEngine(),
+            manifold_service=manifold_svc,
+        )
+        market = _make_market()
+
+        # First tick: manifold is called
+        await engine.tick(markets=[market])
+        assert manifold_svc.call_count == 1
+
+        # Second tick: within cadence window, manifold should NOT be called again
+        await engine.tick(markets=[market])
+        assert manifold_svc.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_manifold_error_does_not_break_tick(self) -> None:
+        """If manifold raises, the tick completes normally without signals."""
+        error_svc = ErrorManifoldService()
+        value_engine = FakeValueEngine()
+        engine = ExecutionEngine(
+            executor=FakeExecutor(),
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=_make_registry(),
+            value_engine=value_engine,
+            manifold_service=error_svc,
+        )
+        market = _make_market()
+
+        result = await engine.tick(markets=[market])
+        assert error_svc.call_count == 1
+        # Tick should still complete successfully
+        assert result.markets_scanned == 1
+        assert result.markets_assessed == 1
+        # No external signals passed (error caught)
+        assert value_engine.last_external_signals is None
+
+    @pytest.mark.asyncio
+    async def test_manifold_empty_signals_passes_none(self) -> None:
+        """Empty external_signals dict should be passed as None to assess_batch."""
+        manifold_svc = FakeManifoldService(signals={})
+        value_engine = FakeValueEngine()
+        engine = ExecutionEngine(
+            executor=FakeExecutor(),
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=_make_registry(),
+            value_engine=value_engine,
+            manifold_service=manifold_svc,
+        )
+
+        await engine.tick(markets=[_make_market()])
+        # Empty dict is falsy → external_signals or None → None
+        assert value_engine.last_external_signals is None
+
+
+# --- Small helpers for test construction ---
+
+
+def _make_cb() -> CircuitBreaker:
+    cb = CircuitBreaker()
+    cb.initialize(150.0)
+    return cb
+
+
+def _make_registry() -> StrategyRegistry:
+    registry = StrategyRegistry()
+    registry.register(FakeStrategy())
+    return registry

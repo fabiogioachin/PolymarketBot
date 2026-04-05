@@ -48,6 +48,7 @@ class TestAppConfigDefaults:
             + w.pattern_kg
             + w.temporal
             + w.crowd_calibration
+            + w.cross_platform
         )
         assert abs(total - 1.0) < 1e-9
 

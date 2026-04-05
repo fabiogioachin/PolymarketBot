@@ -367,6 +367,114 @@ async def test_recommend_hold_on_small_edge(engine: ValueAssessmentEngine):
     assert engine._recommend(-0.03, 0.5) == Recommendation.HOLD
 
 
+async def test_market_resolution_source_default():
+    """MarketResolution defaults to 'polymarket' source."""
+    res = MarketResolution(market_id="m1", category="politics")
+    assert res.source == "polymarket"
+
+
+async def test_market_resolution_source_manifold():
+    """MarketResolution can be created with 'manifold' source."""
+    res = MarketResolution(market_id="m1", category="politics", source="manifold")
+    assert res.source == "manifold"
+
+
+async def test_assess_with_cross_platform_signal(engine: ValueAssessmentEngine):
+    """Cross-platform signal shifts fair value toward Manifold probability."""
+    market = _make_market(yes_price=0.4)
+    result = await engine.assess(market, cross_platform_signal=0.7)
+
+    assert result.inputs is not None
+    assert result.inputs.cross_platform_signal == 0.7
+    # The signal is 0.7, market price 0.4 — fair value should shift upward
+    assert result.fair_value > 0.4
+    # cross_platform source should appear in edge sources
+    cp_sources = [s for s in result.edge_sources if s.name == "cross_platform"]
+    assert len(cp_sources) == 1
+    assert cp_sources[0].contribution > 0  # 0.7 - 0.4 = positive contribution
+    assert "Manifold signal" in cp_sources[0].detail
+
+
+async def test_cross_platform_signal_none_no_effect(engine: ValueAssessmentEngine):
+    """When cross_platform_signal is None, it should not affect output."""
+    market = _make_market(yes_price=0.5)
+    result_without = await engine.assess(market)
+    result_with_none = await engine.assess(market, cross_platform_signal=None)
+
+    assert result_without.fair_value == result_with_none.fair_value
+    # No cross_platform source should appear
+    cp_sources = [s for s in result_with_none.edge_sources if s.name == "cross_platform"]
+    assert len(cp_sources) == 0
+
+
+async def test_cross_platform_high_divergence_confidence(engine: ValueAssessmentEngine):
+    """High divergence (>0.1) between Manifold and market -> conf=0.6."""
+    market = _make_market(yes_price=0.3)
+    result = await engine.assess(market, cross_platform_signal=0.7)
+
+    cp_sources = [s for s in result.edge_sources if s.name == "cross_platform"]
+    assert len(cp_sources) == 1
+    assert cp_sources[0].confidence == 0.6  # divergence = 0.4 > 0.1
+
+
+async def test_cross_platform_low_divergence_confidence(engine: ValueAssessmentEngine):
+    """Low divergence (<=0.1) between Manifold and market -> conf=0.3."""
+    market = _make_market(yes_price=0.5)
+    result = await engine.assess(market, cross_platform_signal=0.55)
+
+    cp_sources = [s for s in result.edge_sources if s.name == "cross_platform"]
+    assert len(cp_sources) == 1
+    assert cp_sources[0].confidence == 0.3  # divergence = 0.05 <= 0.1
+
+
+async def test_cross_platform_signal_clamped(engine: ValueAssessmentEngine):
+    """Cross-platform signal is clamped to [0, 1]."""
+    market = _make_market(yes_price=0.5)
+    # Signal > 1 should be clamped
+    result = await engine.assess(market, cross_platform_signal=1.5)
+
+    cp_sources = [s for s in result.edge_sources if s.name == "cross_platform"]
+    assert len(cp_sources) == 1
+    # Contribution should be based on clamped value (1.0 - 0.5 = 0.5)
+    assert cp_sources[0].contribution == 0.5
+
+
+async def test_assess_batch_with_external_signals(engine: ValueAssessmentEngine):
+    """assess_batch forwards per-market external_signals to individual assess calls."""
+    markets = [
+        _make_market(market_id="m1", yes_price=0.4, volume=5000.0),
+        _make_market(market_id="m2", yes_price=0.5, volume=3000.0),
+    ]
+    external_signals = {
+        "m1": {"cross_platform_signal": 0.8},
+    }
+
+    results = await engine.assess_batch(markets, external_signals=external_signals)
+
+    assert len(results) == 2
+    # Find result for m1 — it should have cross_platform source
+    m1_result = next(r for r in results if r.market_id == "m1")
+    cp_sources = [s for s in m1_result.edge_sources if s.name == "cross_platform"]
+    assert len(cp_sources) == 1
+
+    # Find result for m2 — it should NOT have cross_platform source
+    m2_result = next(r for r in results if r.market_id == "m2")
+    cp_sources_m2 = [s for s in m2_result.edge_sources if s.name == "cross_platform"]
+    assert len(cp_sources_m2) == 0
+
+
+async def test_assess_batch_no_external_signals(engine: ValueAssessmentEngine):
+    """assess_batch works fine without external_signals (backward compatible)."""
+    markets = [
+        _make_market(market_id=f"m{i}", yes_price=0.5, volume=float(i * 1000))
+        for i in range(3)
+    ]
+
+    results = await engine.assess_batch(markets)
+
+    assert len(results) == 3
+
+
 async def test_recommend_buy_sell_thresholds(engine: ValueAssessmentEngine):
     """Test all recommendation thresholds."""
     # BUY: edge >= 0.05, confidence >= 0.3

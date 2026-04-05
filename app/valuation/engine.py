@@ -1,7 +1,10 @@
 """Value Assessment Engine: the core of the system."""
 
+from __future__ import annotations
+
 import asyncio
 from datetime import UTC, datetime
+from typing import Any
 
 from app.core.logging import get_logger
 from app.core.yaml_config import app_config
@@ -45,6 +48,7 @@ class ValueAssessmentEngine:
         event_signal: float | None = None,
         pattern_kg_signal: float | None = None,
         rule_analysis_score: float | None = None,
+        cross_platform_signal: float | None = None,
     ) -> ValuationResult:
         """Assess a single market's fair value.
 
@@ -88,6 +92,7 @@ class ValueAssessmentEngine:
             cross_market_signal=cross_signal,
             event_signal=event_signal,
             pattern_kg_signal=pattern_kg_signal,
+            cross_platform_signal=cross_platform_signal,
             temporal_factor=temporal_factor,
         )
 
@@ -134,6 +139,7 @@ class ValueAssessmentEngine:
         *,
         universe: list[Market] | None = None,
         max_concurrent: int = 10,
+        external_signals: dict[str, dict[str, Any]] | None = None,
     ) -> list[ValuationResult]:
         """Assess multiple markets concurrently.
 
@@ -147,7 +153,8 @@ class ValueAssessmentEngine:
 
         async def _assess_one(m: Market) -> ValuationResult:
             async with semaphore:
-                return await self.assess(m, universe=universe or markets)
+                extra: dict[str, Any] = (external_signals or {}).get(m.id, {})
+                return await self.assess(m, universe=universe or markets, **extra)
 
         results = await asyncio.gather(
             *[_assess_one(m) for m in sorted_markets],
@@ -320,6 +327,25 @@ class ValueAssessmentEngine:
                     contribution=round(pattern_prob - inputs.market_price, 4),
                     confidence=conf,
                     detail=f"KG pattern signal: {pattern_prob:.3f}",
+                )
+            )
+            confidence_sum += conf
+            source_count += 1
+
+        # Cross-platform signal (from Manifold satellite)
+        if inputs.cross_platform_signal is not None:
+            w = self._weights.cross_platform
+            cp_prob = max(0, min(1, inputs.cross_platform_signal))
+            weighted_sum += w * cp_prob
+            weight_total += w
+            divergence = abs(cp_prob - inputs.market_price)
+            conf = 0.6 if divergence > 0.1 else 0.3
+            sources.append(
+                EdgeSource(
+                    name="cross_platform",
+                    contribution=round(cp_prob - inputs.market_price, 4),
+                    confidence=conf,
+                    detail=f"Manifold signal: {cp_prob:.3f}",
                 )
             )
             confidence_sum += conf

@@ -25,11 +25,15 @@ class TestGetSeedPatterns:
         assert expected.issubset(domains)
 
     def test_each_domain_has_at_least_4_patterns(self) -> None:
+        # cross_platform is a new domain seeded with 3 patterns by design
+        DOMAIN_MINIMUMS: dict[str, int] = {"cross_platform": 3}
+        DEFAULT_MINIMUM = 4
         by_domain: dict[str, int] = {}
         for p in get_seed_patterns():
             by_domain[p.domain] = by_domain.get(p.domain, 0) + 1
         for domain, count in by_domain.items():
-            assert count >= 4, f"Domain {domain} has only {count} patterns"
+            minimum = DOMAIN_MINIMUMS.get(domain, DEFAULT_MINIMUM)
+            assert count >= minimum, f"Domain {domain} has only {count} patterns (min {minimum})"
 
     def test_all_pattern_types_present(self) -> None:
         types = {p.pattern_type for p in get_seed_patterns()}

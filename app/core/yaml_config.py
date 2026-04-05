@@ -62,12 +62,13 @@ class RiskConfig(BaseModel):
 class WeightsConfig(BaseModel):
     base_rate: float = 0.15
     rule_analysis: float = 0.15
-    microstructure: float = 0.20
+    microstructure: float = 0.15
     cross_market: float = 0.10
     event_signal: float = 0.15
     pattern_kg: float = 0.10
-    temporal: float = 0.10
+    temporal: float = 0.05
     crowd_calibration: float = 0.05
+    cross_platform: float = 0.10
 
 
 class ThresholdsConfig(BaseModel):
@@ -122,10 +123,21 @@ class ObsidianKgConfig(BaseModel):
     enabled: bool = True
 
 
+class ManifoldConfig(BaseModel):
+    enabled: bool = False
+    base_url: str = "https://api.manifold.markets/v0"
+    rate_limit: int = 10
+    poll_interval_minutes: int = 30
+    match_confidence_threshold: float = 0.6
+    min_manifold_volume: float = 1000.0
+    min_unique_bettors: int = 10
+
+
 class IntelligenceConfig(BaseModel):
     gdelt: GdeltConfig = Field(default_factory=GdeltConfig)
     rss: RssConfig = Field(default_factory=RssConfig)
     obsidian: ObsidianKgConfig = Field(default_factory=ObsidianKgConfig)
+    manifold: ManifoldConfig = Field(default_factory=ManifoldConfig)
 
 
 class AlertRule(BaseModel):

@@ -35,6 +35,7 @@ class ValuationInput(BaseModel):
     cross_market_signal: float | None = None
     event_signal: float | None = None
     pattern_kg_signal: float | None = None
+    cross_platform_signal: float | None = None  # Manifold probability as fair value
     temporal_factor: float | None = None
 
 
@@ -80,3 +81,4 @@ class MarketResolution(BaseModel):
     resolved_yes: bool = False
     resolution_date: datetime | None = None
     volume: float = 0.0
+    source: str = "polymarket"  # polymarket | manifold

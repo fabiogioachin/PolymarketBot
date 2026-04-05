@@ -480,6 +480,67 @@ def get_seed_patterns() -> list[PatternTemplate]:
             historical_accuracy=0.48,
             tags=["weather", "outdoor", "scoring"],
         ),
+        # --- CROSS-PLATFORM (3 patterns) ---
+        PatternTemplate(
+            name="Cross-Platform Divergence Signal",
+            domain="cross_platform",
+            pattern_type="correlation",
+            confidence=0.55,
+            description=(
+                "When Manifold and Polymarket diverge by >15% on the same market,"
+                " one platform is likely mispriced. Manifold's play-money crowd"
+                " sometimes spots qualitative signals that real-money traders miss."
+            ),
+            expected_outcome=(
+                "Divergence >15% signals a potential edge. Direction depends on which"
+                " platform has better information for the specific domain."
+            ),
+            trigger_condition=(
+                "Cross-platform analyzer: |divergence| > 0.15 with match confidence > 0.7"
+            ),
+            historical_accuracy=0.0,
+            tags=["cross_platform", "manifold", "divergence", "arbitrage"],
+        ),
+        PatternTemplate(
+            name="Manifold Calibration Advantage",
+            domain="cross_platform",
+            pattern_type="recurring",
+            confidence=0.50,
+            description=(
+                "Manifold markets tend to be better calibrated at extreme probabilities"
+                " (<0.2 or >0.8). Real-money markets sometimes overreact to news,"
+                " while play-money crowds anchor more to base rates."
+            ),
+            expected_outcome=(
+                "When Polymarket price is extreme (>0.85 or <0.15) and Manifold"
+                " disagrees by >10%, Manifold's estimate may be more accurate."
+            ),
+            trigger_condition=(
+                "Cross-platform: Polymarket extreme price + Manifold moderate price"
+            ),
+            historical_accuracy=0.0,
+            tags=["cross_platform", "calibration", "extreme_probability"],
+        ),
+        PatternTemplate(
+            name="Volume-Weighted Divergence",
+            domain="cross_platform",
+            pattern_type="causal",
+            confidence=0.45,
+            description=(
+                "Divergence is more meaningful when both platforms have high volume"
+                " and many unique bettors. Low-volume Manifold markets should be"
+                " heavily discounted."
+            ),
+            expected_outcome=(
+                "High-quality matches (both platforms >$10k volume) with divergence"
+                " >10% have higher predictive value than low-quality matches."
+            ),
+            trigger_condition=(
+                "Cross-platform: both markets volume > threshold + divergence > 0.10"
+            ),
+            historical_accuracy=0.0,
+            tags=["cross_platform", "volume", "quality", "divergence"],
+        ),
     ]
 
 

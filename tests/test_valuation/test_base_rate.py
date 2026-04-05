@@ -274,3 +274,137 @@ async def test_adjustment_insufficient_data(db: ResolutionDB):
     analyzer = CrowdCalibrationAnalyzer(db)
     adj = await analyzer.get_adjustment("politics")
     assert adj == 0.0
+
+
+# ── ResolutionDB source column Tests ───────────────────────────────
+
+
+async def test_db_default_source(db: ResolutionDB):
+    """Resolution stored without explicit source defaults to 'polymarket'."""
+    res = _make_resolution("m_default", "politics", resolved_yes=True)
+    await db.add_resolution(res)
+    fetched = await db.get_resolution("m_default")
+    assert fetched is not None
+    assert fetched.source == "polymarket"
+
+
+async def test_db_explicit_source(db: ResolutionDB):
+    """Resolution stored with explicit source='manifold' roundtrips correctly."""
+    res = MarketResolution(
+        market_id="manifold:abc123",
+        category="sports",
+        question="Will Team A win?",
+        final_price=0.65,
+        resolved_yes=True,
+        resolution_date=datetime(2025, 3, 1),
+        volume=2000.0,
+        source="manifold",
+    )
+    await db.add_resolution(res)
+    fetched = await db.get_resolution("manifold:abc123")
+    assert fetched is not None
+    assert fetched.source == "manifold"
+
+
+async def test_db_filter_by_source(db: ResolutionDB):
+    """get_resolutions(source=...) returns only records matching that source."""
+    poly_res = MarketResolution(
+        market_id="poly:1",
+        category="politics",
+        question="Poly question",
+        final_price=0.4,
+        resolved_yes=False,
+        volume=1000.0,
+        source="polymarket",
+    )
+    manifold_res = MarketResolution(
+        market_id="manifold:1",
+        category="politics",
+        question="Manifold question",
+        final_price=0.6,
+        resolved_yes=True,
+        volume=800.0,
+        source="manifold",
+    )
+    await db.add_resolution(poly_res)
+    await db.add_resolution(manifold_res)
+
+    poly_results = await db.get_resolutions(source="polymarket")
+    manifold_results = await db.get_resolutions(source="manifold")
+    all_results = await db.get_resolutions()
+
+    assert len(poly_results) == 1
+    assert poly_results[0].market_id == "poly:1"
+    assert len(manifold_results) == 1
+    assert manifold_results[0].market_id == "manifold:1"
+    assert len(all_results) == 2
+
+
+async def test_db_filter_by_category_and_source(db: ResolutionDB):
+    """get_resolutions with both category and source applies both filters."""
+    await db.add_resolution(
+        MarketResolution(
+            market_id="p1",
+            category="politics",
+            question="Q1",
+            final_price=0.5,
+            resolved_yes=True,
+            volume=500.0,
+            source="polymarket",
+        )
+    )
+    await db.add_resolution(
+        MarketResolution(
+            market_id="m1",
+            category="politics",
+            question="Q2",
+            final_price=0.5,
+            resolved_yes=False,
+            volume=600.0,
+            source="manifold",
+        )
+    )
+    await db.add_resolution(
+        MarketResolution(
+            market_id="m2",
+            category="sports",
+            question="Q3",
+            final_price=0.7,
+            resolved_yes=True,
+            volume=700.0,
+            source="manifold",
+        )
+    )
+
+    results = await db.get_resolutions(category="politics", source="manifold")
+    assert len(results) == 1
+    assert results[0].market_id == "m1"
+
+
+async def test_db_source_preserved_on_upsert(db: ResolutionDB):
+    """Upserting a record with a different source replaces the previous source."""
+    res1 = MarketResolution(
+        market_id="shared:1",
+        category="crypto",
+        question="BTC?",
+        final_price=0.8,
+        resolved_yes=True,
+        volume=3000.0,
+        source="polymarket",
+    )
+    res2 = MarketResolution(
+        market_id="shared:1",
+        category="crypto",
+        question="BTC?",
+        final_price=0.9,
+        resolved_yes=True,
+        volume=3500.0,
+        source="manifold",
+    )
+    await db.add_resolution(res1)
+    await db.add_resolution(res2)
+
+    fetched = await db.get_resolution("shared:1")
+    assert fetched is not None
+    assert fetched.source == "manifold"
+    assert fetched.final_price == pytest.approx(0.9)

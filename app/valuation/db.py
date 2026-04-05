@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import aiosqlite
@@ -13,6 +14,11 @@ logger = get_logger(__name__)
 
 _DEFAULT_DB_PATH = Path("data/resolutions.db")
 
+_MIGRATE_ADD_SOURCE = (
+    "ALTER TABLE market_resolutions"
+    " ADD COLUMN source TEXT NOT NULL DEFAULT 'polymarket'"
+)
+
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS market_resolutions (
     market_id TEXT PRIMARY KEY,
@@ -21,7 +27,8 @@ CREATE TABLE IF NOT EXISTS market_resolutions (
     final_price REAL NOT NULL DEFAULT 0.0,
     resolved_yes INTEGER NOT NULL DEFAULT 0,
     resolution_date TEXT,
-    volume REAL NOT NULL DEFAULT 0.0
+    volume REAL NOT NULL DEFAULT 0.0,
+    source TEXT NOT NULL DEFAULT 'polymarket'
 )
 """
 
@@ -40,6 +47,9 @@ class ResolutionDB:
         self._conn = await aiosqlite.connect(self._db_path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute(_CREATE_TABLE)
+        # Migrate: add source column if missing (for existing DBs)
+        with contextlib.suppress(Exception):
+            await self._conn.execute(_MIGRATE_ADD_SOURCE)
         await self._conn.commit()
         logger.info("resolution_db_initialized", path=self._db_path)
 
@@ -55,8 +65,9 @@ class ResolutionDB:
         await conn.execute(
             """
             INSERT OR REPLACE INTO market_resolutions
-                (market_id, category, question, final_price, resolved_yes, resolution_date, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (market_id, category, question, final_price, resolved_yes,
+                 resolution_date, volume, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 resolution.market_id,
@@ -66,22 +77,30 @@ class ResolutionDB:
                 int(resolution.resolved_yes),
                 resolution.resolution_date.isoformat() if resolution.resolution_date else None,
                 resolution.volume,
+                resolution.source,
             ),
         )
         await conn.commit()
 
     async def get_resolutions(
-        self, category: str | None = None
+        self, category: str | None = None, source: str | None = None
     ) -> list[MarketResolution]:
-        """Retrieve resolution records, optionally filtered by category."""
+        """Retrieve resolution records, optionally filtered by category and/or source."""
         conn = self._ensure_conn()
+        conditions: list[str] = []
+        params: list[str] = []
         if category is not None:
-            cursor = await conn.execute(
-                "SELECT * FROM market_resolutions WHERE category = ?",
-                (category,),
-            )
-        else:
-            cursor = await conn.execute("SELECT * FROM market_resolutions")
+            conditions.append("category = ?")
+            params.append(category)
+        if source is not None:
+            conditions.append("source = ?")
+            params.append(source)
+
+        query = "SELECT * FROM market_resolutions"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        cursor = await conn.execute(query, params)
         rows = await cursor.fetchall()
         return [self._row_to_resolution(row) for row in rows]
 
@@ -132,4 +151,5 @@ class ResolutionDB:
             resolved_yes=bool(row["resolved_yes"]),
             resolution_date=resolution_date,
             volume=row["volume"],
+            source=row["source"] if "source" in dict(row) else "polymarket",
         )

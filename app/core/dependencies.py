@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.risk.circuit_breaker import CircuitBreaker
     from app.risk.manager import RiskManager
     from app.services.bot_service import BotService
+    from app.services.manifold_service import ManifoldService
     from app.services.market_service import MarketService
     from app.strategies.registry import StrategyRegistry
     from app.valuation.engine import ValueAssessmentEngine
@@ -29,6 +30,7 @@ _strategy_registry: StrategyRegistry | None = None
 _value_engine: ValueAssessmentEngine | None = None
 _execution_engine: ExecutionEngine | None = None
 _bot_service: BotService | None = None
+_manifold_service: ManifoldService | None = None
 
 
 # ── Lazy accessors ───────────────────────────────────────────────────
@@ -41,6 +43,20 @@ def get_market_service() -> MarketService:
 
         _market_service = MarketService()
     return _market_service
+
+
+async def get_manifold_service() -> ManifoldService | None:
+    """Get ManifoldService singleton. Returns None if Manifold is disabled."""
+    global _manifold_service  # noqa: PLW0603
+    if not app_config.intelligence.manifold.enabled:
+        return None
+    if _manifold_service is None:
+        from app.clients.manifold_client import ManifoldClient
+        from app.services.manifold_service import ManifoldService
+
+        client = ManifoldClient(rate_limit=app_config.intelligence.manifold.rate_limit)
+        _manifold_service = ManifoldService(client)
+    return _manifold_service
 
 
 async def get_risk_kb() -> RiskKnowledgeBase:
@@ -141,6 +157,7 @@ async def get_execution_engine() -> ExecutionEngine:
         clob = PolymarketClobClient()
         executor = DryRunExecutor(clob)
         value_engine = await get_value_engine()
+        manifold_service = await get_manifold_service()
         store = TradeStore()
         await store.init()
         _execution_engine = ExecutionEngine(
@@ -151,6 +168,7 @@ async def get_execution_engine() -> ExecutionEngine:
             value_engine=value_engine,
             market_service=get_market_service(),
             trade_store=store,
+            manifold_service=manifold_service,
         )
         await _execution_engine.restore_from_store()
     return _execution_engine

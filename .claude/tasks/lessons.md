@@ -31,5 +31,17 @@ Lessons that affect future tasks. Target: under 15 entries.
 **Root cause**: Protocol designed for single-signal strategies; arbitrage is inherently multi-leg.
 **Action**: BaseStrategy.evaluate now returns `Signal | list[Signal] | None`. Engine normalizes to list. Any future multi-leg strategy follows same pattern.
 
+### 2026-04-05 — [codebase] External plan assumptions must be verified against actual code
+**Context**: /feature with user-provided MANIFOLD_INTEGRATION_PLAN.md
+**What happened**: The plan assumed `SignalType` enum contained signal sources (it contains BUY/SELL/HOLD), that the VAE used a `signals` dict (it uses individual float params), and that `config.yaml` existed (only `config.example.yaml` does). Planning-specialist caught all 3 and produced a corrected plan.
+**Root cause**: Plan was written from memory/documentation, not from reading the actual code.
+**Action**: Always run codebase exploration before planning, even when user provides a detailed plan. Verify every file path, class name, and method signature referenced in external plans.
+
+### 2026-04-05 — [codebase] assess_batch needs external_signals forwarding pattern
+**Context**: Wiring Manifold cross-platform signal into the VAE
+**What happened**: `assess_batch()` had no way to pass per-market external signals to individual `assess()` calls. Added a generic `external_signals: dict[str, dict[str, float | None]]` parameter.
+**Root cause**: Original design only supported signals computed internally by the engine (base_rate, microstructure, etc.), not externally-provided per-market signals.
+**Action**: The `external_signals` pattern is now the standard way to inject per-market signals from satellite sources. Use it for any future data integrations.
+
 ## Archive
 Resolved or one-off entries. Not read by agents.

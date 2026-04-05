@@ -62,6 +62,7 @@ class ExecutionEngine:
         value_engine: Any = None,
         market_service: Any = None,
         trade_store: TradeStore | None = None,
+        manifold_service: Any = None,
     ) -> None:
         self._executor = executor
         self._risk = risk_manager
@@ -70,12 +71,14 @@ class ExecutionEngine:
         self._value_engine = value_engine
         self._market_service = market_service
         self._store = trade_store
+        self._manifold_service = manifold_service
         self._running = False
         self._tick_count = 0
         self._last_tick: datetime | None = None
         self._trade_log: list[dict[str, object]] = []
         # Map token_id → market_id for position lookups
         self._token_to_market: dict[str, str] = {}
+        self._last_manifold_refresh: datetime | None = None
 
     async def tick(self, markets: list[Market] | None = None) -> TickResult:
         """Execute a single tick cycle."""
@@ -99,10 +102,17 @@ class ExecutionEngine:
         # Build market lookup for position management
         market_by_id: dict[str, Market] = {m.id: m for m in markets}
 
+        # 2b. Fetch Manifold cross-platform signals (on slower cadence)
+        external_signals: dict[str, dict[str, float | None]] = {}
+        if self._manifold_service is not None:
+            external_signals = await self._fetch_manifold_signals(markets, now)
+
         # 3. Assess values
         valuations: dict[str, ValuationResult] = {}
         if self._value_engine:
-            assessed = await self._value_engine.assess_batch(markets, universe=markets)
+            assessed = await self._value_engine.assess_batch(
+                markets, universe=markets, external_signals=external_signals or None
+            )
             for v in assessed:
                 valuations[v.market_id] = v
         result.markets_assessed = len(valuations)
@@ -345,6 +355,39 @@ class ExecutionEngine:
                     )
             except Exception as e:
                 result.errors.append(f"exit {pos.token_id}: {e}")
+
+    async def _fetch_manifold_signals(
+        self, markets: list[Market], now: datetime
+    ) -> dict[str, dict[str, float | None]]:
+        """Fetch cross-platform signals from Manifold on a slower cadence."""
+        from app.core.yaml_config import app_config
+
+        interval = app_config.intelligence.manifold.poll_interval_minutes * 60
+        if (
+            self._last_manifold_refresh is not None
+            and (now - self._last_manifold_refresh).total_seconds() < interval
+        ):
+            return {}
+
+        try:
+            signals_map = await self._manifold_service.get_signals_batch(markets)
+            self._last_manifold_refresh = now
+
+            external: dict[str, dict[str, float | None]] = {}
+            for market_id, signal in signals_map.items():
+                external[market_id] = {
+                    "cross_platform_signal": signal.signal_value,
+                }
+
+            if external:
+                logger.info(
+                    "manifold_signals_fetched",
+                    count=len(external),
+                )
+            return external
+        except Exception as exc:
+            logger.warning("manifold_fetch_failed", error=str(exc))
+            return {}
 
     async def restore_from_store(self) -> None:
         """Restore trade log and positions from SQLite on startup."""
