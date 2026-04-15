@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS trades (
     edge REAL NOT NULL DEFAULT 0,
     pnl REAL NOT NULL DEFAULT 0,
     type TEXT NOT NULL DEFAULT 'open',
-    reasoning TEXT NOT NULL DEFAULT ''
+    reasoning TEXT NOT NULL DEFAULT '',
+    time_horizon TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -79,6 +80,14 @@ class TradeStore:
         await self._conn.execute(_CREATE_STATE)
         await self._conn.execute(_CREATE_INTELLIGENCE_EVENTS)
         await self._conn.commit()
+        # Migration: add time_horizon column to existing DBs
+        try:
+            await self._conn.execute(
+                "ALTER TABLE trades ADD COLUMN time_horizon TEXT NOT NULL DEFAULT ''"
+            )
+            await self._conn.commit()
+        except Exception:
+            logger.debug("time_horizon_column_already_exists")  # migration already applied
         logger.info("trade_store_initialized", path=self._db_path)
 
     def _ensure(self) -> aiosqlite.Connection:
@@ -93,8 +102,8 @@ class TradeStore:
         conn = self._ensure()
         await conn.execute(
             """INSERT INTO trades (timestamp, market_id, strategy, side, size_eur,
-               price, edge, pnl, type, reasoning)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               price, edge, pnl, type, reasoning, time_horizon)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 str(trade.get("timestamp", "")),
                 str(trade.get("market_id", "")),
@@ -106,6 +115,7 @@ class TradeStore:
                 float(trade.get("pnl", 0) or 0),
                 str(trade.get("type", "open")),
                 str(trade.get("reasoning", "")),
+                str(trade.get("horizon", "")),
             ),
         )
         await conn.commit()
@@ -128,6 +138,7 @@ class TradeStore:
                 "pnl": row["pnl"],
                 "type": row["type"],
                 "reasoning": row["reasoning"],
+                "time_horizon": row["time_horizon"],
             }
             for row in rows
         ]

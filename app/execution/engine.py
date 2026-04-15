@@ -386,6 +386,7 @@ class ExecutionEngine:
                     "edge": 0.0,
                     "pnl": round(realized, 4),
                     "type": "close",
+                    "horizon": "",
                     "reasoning": (
                         f"Market resolved: {resolution.winning_outcome} won. "
                         f"Payout ${payout}/share. "
@@ -461,6 +462,7 @@ class ExecutionEngine:
                         "edge": 0.0,
                         "pnl": round(realized, 4),
                         "type": "close" if fully_closed else "partial_exit",
+                        "horizon": "",
                         "reasoning": exit_decision.reason,
                     })
 

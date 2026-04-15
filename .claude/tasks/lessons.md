@@ -57,6 +57,34 @@ Lessons that affect future tasks. Target: under 15 entries.
 **Root cause**: The 0.01 floor was meant to prevent negative prices but created artificial arbitrage for sub-penny tokens. No liquidity/spread simulation.
 **Action**: Removed artificial floor (`max(0.0001, ...)`). Added `_estimate_spread()` (hyperbolically wider at extreme prices) and `_estimate_depth()` (max 100 shares at <0.01). Sub-penny tokens now have 50-100% spread and capped depth.
 
+### 2026-04-15 — [workflow] Browser test against live server validates runtime, not code
+
+**Context**: `PG_browser_test_session.md` eseguito contro server avviato PRIMA delle fix Phase 11-12
+**What happened**: Intelligence/Knowledge tabs senza fetch API, `knowledge/debug` 404, `intelligence/news` 404 — tutti "fix già applicati nel codice" (Phase 11 Step 4, Phase 12 Step 1). Ma il server (tick_count=1452 all'avvio) era un'istanza precedente alle modifiche.
+**Root cause**: I test unit (714 pass) verificano correttezza del codice, non il runtime. Un server avviato prima del merge dei fix continua a servire il codice vecchio finché non viene riavviato.
+**Action**: In Docker: rebuild immagini (`docker compose build`) + restart container. Verificare che `knowledge/debug` risponda 200 e che Intelligence tab faccia chiamate API prima di segnare la browser validation come conclusa.
+
+### 2026-04-15 — [workflow] Browser caches Docker static assets across rebuilds
+
+**Context**: Rebuild Docker frontend dopo Phase 11-12 — browser continuava a caricare vecchio app.js (19156 byte invece di 27784)
+**What happened**: `performance.getEntriesByType('resource')` mostrava `transferSize=0` per app.js — browser usava disk cache. `typeof loadIntelligence === 'undefined'` nonostante rebuild corretto. Nginx non impostava `Cache-Control` headers per `/static/`.
+**Root cause**: Nginx default serving non invia `no-cache` headers. Browser cacheava app.js senza scadenza. URL del file (`/static/js/app.js`) invariato → browser non sapeva che il file era cambiato.
+**Action**: (1) Aggiungere `Cache-Control: no-store` in nginx.conf per `/static/`. (2) Usare versioning nell'URL (`?v=N`) in index.html per script e CSS. Incrementare `N` ad ogni rebuild che modifica file statici.
+
+### 2026-04-15 — [codebase] SQLite schema mismatch: dict key vs column name
+
+**Context**: Bug 2 fix — `time_horizon` null in trade log
+**What happened**: `engine.py` passed `"horizon"` in the trade dict, but `trade_store.py` didn't have the column in `_CREATE_TRADES` and `append_trade()` didn't extract it. The field was silently dropped.
+**Root cause**: The dict key name (`"horizon"`) differed from the intended column name (`time_horizon`), and no test covered the round-trip store→retrieve with this field.
+**Action**: When adding a new field to a trade/position dict, always update schema + INSERT + SELECT + write a round-trip test in the same PR. For existing DBs, add `ALTER TABLE ... ADD COLUMN` in `init()` with `logger.debug` on duplicate-column exception.
+
+### 2026-04-15 — [codebase] position_monitor: sub-10-cent positions on expired markets never exited
+
+**Context**: Bug 3 fix — unrealized -20%/-36% on AAPL position (expired April 13)
+**What happened**: Monitor comment said "let cheap long-shots ride to resolution". But in dry_run, resolved markets don't get processed — the position stays open indefinitely with capital locked.
+**Root cause**: The "ride to resolution" logic assumed that resolution events would eventually close the position. In dry_run with no settlement feed, they don't.
+**Action**: Added `if time_left.total_seconds() <= 0: force_exit` before the 12h flatten logic. Any market with `end_date` in the past gets an urgency=1.0 exit regardless of price. 11 new tests added.
+
 ### 2026-04-14 — [codebase] Federal Register API returns agencies as list[dict], not list[str]
 **Context**: Intelligence tick failed with Pydantic validation on NewsItem.tags
 **What happened**: `institutional_client.py` passed `doc.get("agencies")` directly to NewsItem.tags, but the Federal Register API returns agencies as `[{"raw_name": "...", ...}]`.

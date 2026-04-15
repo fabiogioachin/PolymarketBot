@@ -94,6 +94,21 @@ def evaluate_exit(
     # 3. Near resolution: flatten to avoid binary risk
     if market and market.end_date:
         time_left = market.end_date - datetime.now(tz=UTC)
+
+        # Force-exit expired markets regardless of price.
+        # Sub-10-cent "long-shot" bets are normally left to ride to resolution,
+        # but if the market has already passed end_date there is no resolution
+        # coming in dry_run — exit to reclaim capital.
+        if time_left.total_seconds() <= 0:
+            return ExitDecision(
+                should_exit=True,
+                reason=(
+                    f"Market expired {abs(time_left.days)}d ago "
+                    f"(end_date {market.end_date.date()}) — force exit"
+                ),
+                urgency=1.0,
+            )
+
         if time_left < timedelta(hours=_FLATTEN_HOURS):
             hours = time_left.total_seconds() / 3600
             # If price collapsed near expiry, the bet is almost certainly losing.
