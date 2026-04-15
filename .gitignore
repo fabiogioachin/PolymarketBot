@@ -30,6 +30,7 @@ htmlcov/
 
 # Environment
 .env
+config/config.yaml
 
 # Data & databases
 *.db

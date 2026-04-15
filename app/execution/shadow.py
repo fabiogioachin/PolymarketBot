@@ -1,6 +1,6 @@
 """Shadow executor: runs dry-run and live in parallel, compares results."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.core.logging import get_logger
 from app.execution.dry_run import DryRunExecutor
@@ -90,6 +90,3 @@ class ShadowExecutor:
 
 
 __all__ = ["ShadowComparison", "ShadowExecutor"]
-
-# Keep dataclass field import satisfied at runtime (used implicitly by @dataclass).
-_field = field

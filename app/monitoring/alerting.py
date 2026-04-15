@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -41,10 +41,6 @@ class AlertRuleConfig:
     min_edge: float | None = None  # only trigger if edge >= min_edge
     cooldown_seconds: int = 300  # minimum time between same alert type
 
-
-# Silence false-positive "field default" warnings from dataclasses when used
-# as a type annotation — the field() call is intentional.
-_SENTINEL: list[AlertRuleConfig] = field(default_factory=list)  # type: ignore[assignment]
 
 
 class AlertManager:

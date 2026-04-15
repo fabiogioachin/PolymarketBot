@@ -42,6 +42,15 @@ class CircuitBreakerConfig(BaseModel):
     cooldown_minutes: int = 60
 
 
+class HorizonAllocationConfig(BaseModel):
+    """Budget allocation percentages per time horizon. Must sum to 100."""
+
+    short_pct: float = 65.0        # < 3 days
+    medium_pct: float = 25.0       # 3-14 days
+    long_pct: float = 8.0          # 14-30 days
+    super_long_pct: float = 2.0    # > 30 days
+
+
 class RiskConfig(BaseModel):
     """Risk configuration.
 
@@ -56,6 +65,9 @@ class RiskConfig(BaseModel):
     daily_loss_limit_eur: float | str = 20.0
     fixed_fraction_pct: float = 5.0
     max_positions: int = 25
+    horizon_allocation: HorizonAllocationConfig = Field(
+        default_factory=HorizonAllocationConfig
+    )
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
 
 
@@ -72,7 +84,11 @@ class WeightsConfig(BaseModel):
 
 
 class ThresholdsConfig(BaseModel):
-    min_edge: float = 0.05
+    min_edge: float = 0.05                # fallback
+    min_edge_short: float = 0.03          # short: lower bar, fast turnover
+    min_edge_medium: float = 0.05         # medium: standard
+    min_edge_long: float = 0.10           # long: high bar, capital lockup cost
+    min_edge_super_long: float = 0.15     # super_long: very high bar
     min_confidence: float = 0.3
     strong_edge: float = 0.15
 
@@ -85,13 +101,11 @@ class ValuationConfig(BaseModel):
 
 class GdeltConfig(BaseModel):
     enabled: bool = True
-    poll_interval_minutes: int = 15
+    poll_interval_minutes: int = 60
     watchlist: dict[str, list[str]] = Field(default_factory=lambda: {
         "themes": [
             "ELECTION",
             "ECON_INFLATION",
-            "ECON_INTEREST_RATE",
-            "CLIMATE_CHANGE",
             "WB_CONFLICT",
         ],
         "actors": ["USA", "RUS", "CHN", "EU"],

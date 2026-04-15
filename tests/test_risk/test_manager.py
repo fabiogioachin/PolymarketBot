@@ -126,11 +126,19 @@ def test_check_order_sell_signal_approved(manager: RiskManager) -> None:
 
 def test_size_position_returns_size_result(manager: RiskManager) -> None:
     """size_position returns a SizeResult with positive size for valid signal."""
-    signal = make_signal(confidence=0.8)
+    signal = Signal(
+        strategy="test_strategy",
+        market_id="market-1",
+        token_id="token-abc",
+        signal_type=SignalType.BUY,
+        confidence=0.8,
+        edge_amount=0.10,
+        market_price=0.5,
+    )
     result = manager.size_position(signal, capital=150.0, price=0.5)
     assert isinstance(result, SizeResult)
     assert result.size_eur > 0.0
-    assert result.method == "confidence_scaled"
+    assert result.method == "half_kelly"
 
 
 # ── record_fill ───────────────────────────────────────────────────────

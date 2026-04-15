@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.execution.engine import ExecutionEngine
+from app.knowledge.risk_kb import RiskKnowledgeBase, RiskLevel
 from app.models.market import Market, MarketCategory, Outcome
 from app.models.order import (
     Balance,
     OrderRequest,
     OrderResult,
+    OrderSide,
     OrderStatus,
     Position,
 )
@@ -208,6 +210,7 @@ def _make_market(market_id: str = "mkt-1") -> Market:
         question="Will X happen?",
         category=MarketCategory.POLITICS,
         outcomes=[Outcome(token_id="tok-1", outcome="Yes", price=0.5)],
+        end_date=datetime.now(tz=UTC) + timedelta(days=1),  # SHORT horizon
     )
 
 
@@ -557,3 +560,436 @@ def _make_registry() -> StrategyRegistry:
     registry = StrategyRegistry()
     registry.register(FakeStrategy())
     return registry
+
+
+# --- Partial exit tests ---
+
+
+class PositionAwareExecutor:
+    """Executor that tracks positions and supports partial fill for sells."""
+
+    def __init__(
+        self,
+        balance: float = 150.0,
+        positions: list[Position] | None = None,
+        sell_fill_fraction: float = 1.0,
+    ) -> None:
+        self._balance = balance
+        self._positions: list[Position] = list(positions) if positions else []
+        self._orders: list[OrderRequest] = []
+        self._sell_fill_fraction = sell_fill_fraction
+
+    async def execute(self, order: OrderRequest) -> OrderResult:
+        self._orders.append(order)
+        if order.side == OrderSide.SELL:
+            filled = order.size * self._sell_fill_fraction
+            # Remove position if fully sold
+            if self._sell_fill_fraction >= 1.0:
+                self._positions = [
+                    p for p in self._positions if p.token_id != order.token_id
+                ]
+            else:
+                for p in self._positions:
+                    if p.token_id == order.token_id:
+                        p.size -= filled
+                        break
+            return OrderResult(
+                order_id="fake-sell",
+                status=OrderStatus.FILLED,
+                token_id=order.token_id,
+                side=order.side,
+                price=order.price,
+                size=order.size,
+                filled_size=filled,
+                is_simulated=True,
+                timestamp=datetime.now(tz=UTC),
+            )
+        return OrderResult(
+            order_id="fake-buy",
+            status=OrderStatus.FILLED,
+            token_id=order.token_id,
+            side=order.side,
+            price=order.price,
+            size=order.size,
+            filled_size=order.size,
+            is_simulated=True,
+            timestamp=datetime.now(tz=UTC),
+        )
+
+    async def get_positions(self) -> list[Position]:
+        return list(self._positions)
+
+    async def get_balance(self) -> Balance:
+        return Balance(total=self._balance, available=self._balance, locked=0.0)
+
+
+class HoldStrategy:
+    """Strategy that always returns HOLD (no signal)."""
+
+    @property
+    def name(self) -> str:
+        return "hold_strategy"
+
+    @property
+    def domain_filter(self) -> list[str]:
+        return []
+
+    async def evaluate(
+        self,
+        market: Market,
+        valuation: ValuationResult,
+        knowledge: object = None,
+    ) -> Signal | None:
+        return None
+
+
+class TestPartialExitFill:
+    """Verify engine handles partial exit fills correctly."""
+
+    @pytest.mark.asyncio
+    async def test_full_exit_logs_close(self) -> None:
+        """A full exit should log type=close and count as positions_closed."""
+        pos = Position(
+            market_id="mkt-1",
+            token_id="tok-1",
+            side=OrderSide.BUY,
+            size=10.0,
+            avg_price=0.40,
+            current_price=0.80,  # high enough for take-profit
+            unrealized_pnl=4.0,
+        )
+        executor = PositionAwareExecutor(
+            positions=[pos], sell_fill_fraction=1.0
+        )
+        # Use HoldStrategy to prevent new buys
+        registry = StrategyRegistry()
+        registry.register(HoldStrategy())
+
+        # Value engine that returns edge-reversed valuation to trigger exit
+        class ExitValuation:
+            async def assess_batch(
+                self,
+                markets: list[Market],
+                universe: list[Market] | None = None,
+                external_signals: object = None,
+            ) -> list[ValuationResult]:
+                return [
+                    ValuationResult(
+                        market_id=m.id,
+                        fair_value=0.30,
+                        market_price=0.80,
+                        edge=-0.50,
+                        confidence=0.8,
+                        fee_adjusted_edge=-0.50,
+                        recommendation=Recommendation.SELL,
+                    )
+                    for m in markets
+                ]
+
+        engine = ExecutionEngine(
+            executor=executor,
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=registry,
+            value_engine=ExitValuation(),
+        )
+        market = _make_market()
+        result = await engine.tick(markets=[market])
+
+        assert result.positions_closed == 1
+        # Trade log should have a "close" entry
+        close_trades = [t for t in engine.trade_log if t.get("type") == "close"]
+        assert len(close_trades) == 1
+
+    @pytest.mark.asyncio
+    async def test_partial_exit_logs_partial_exit(self) -> None:
+        """A partial exit should log type=partial_exit, not count as closed."""
+        pos = Position(
+            market_id="mkt-1",
+            token_id="tok-1",
+            side=OrderSide.BUY,
+            size=10.0,
+            avg_price=0.40,
+            current_price=0.80,
+            unrealized_pnl=4.0,
+        )
+        executor = PositionAwareExecutor(
+            positions=[pos], sell_fill_fraction=0.5  # only 50% fills
+        )
+        registry = StrategyRegistry()
+        registry.register(HoldStrategy())
+
+        class ExitValuation:
+            async def assess_batch(
+                self,
+                markets: list[Market],
+                universe: list[Market] | None = None,
+                external_signals: object = None,
+            ) -> list[ValuationResult]:
+                return [
+                    ValuationResult(
+                        market_id=m.id,
+                        fair_value=0.30,
+                        market_price=0.80,
+                        edge=-0.50,
+                        confidence=0.8,
+                        fee_adjusted_edge=-0.50,
+                        recommendation=Recommendation.SELL,
+                    )
+                    for m in markets
+                ]
+
+        engine = ExecutionEngine(
+            executor=executor,
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=registry,
+            value_engine=ExitValuation(),
+        )
+        market = _make_market()
+        result = await engine.tick(markets=[market])
+
+        # Partial fill should NOT count as a closed position
+        assert result.positions_closed == 0
+        # But realized P&L should still be recorded
+        assert result.realized_pnl != 0.0
+        # Trade log should have a "partial_exit" entry, not "close"
+        partial_trades = [
+            t for t in engine.trade_log if t.get("type") == "partial_exit"
+        ]
+        assert len(partial_trades) == 1
+        close_trades = [t for t in engine.trade_log if t.get("type") == "close"]
+        assert len(close_trades) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_position_rebuy_in_same_tick(self) -> None:
+        """R2: After a full exit, the engine must NOT rebuy in the same tick.
+
+        The exited_market_ids mechanism blocks new signals for markets
+        that were just closed, preventing buy-sell-rebuy loops.
+        """
+        pos = Position(
+            market_id="mkt-1",
+            token_id="tok-1",
+            side=OrderSide.BUY,
+            size=10.0,
+            avg_price=0.40,
+            current_price=0.80,  # high enough for take-profit
+            unrealized_pnl=4.0,
+        )
+        executor = PositionAwareExecutor(
+            positions=[pos], sell_fill_fraction=1.0  # full exit
+        )
+        # Use FakeStrategy that would BUY this market if allowed
+        registry = _make_registry()
+
+        class ExitValuation:
+            async def assess_batch(
+                self,
+                markets: list[Market],
+                universe: list[Market] | None = None,
+                external_signals: object = None,
+            ) -> list[ValuationResult]:
+                return [
+                    ValuationResult(
+                        market_id=m.id,
+                        fair_value=0.30,
+                        market_price=0.80,
+                        edge=-0.50,
+                        confidence=0.8,
+                        fee_adjusted_edge=-0.50,
+                        recommendation=Recommendation.SELL,
+                    )
+                    for m in markets
+                ]
+
+        engine = ExecutionEngine(
+            executor=executor,
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=registry,
+            value_engine=ExitValuation(),
+        )
+        market = _make_market()
+        result = await engine.tick(markets=[market])
+
+        # Position should have been closed
+        assert result.positions_closed >= 1
+        # No new BUY orders should have been placed (rebuy blocked)
+        assert result.orders_placed == 0
+
+    @pytest.mark.asyncio
+    async def test_partial_exit_does_not_block_reevaluation(self) -> None:
+        """A partial exit should NOT add market to exited_market_ids."""
+        pos = Position(
+            market_id="mkt-1",
+            token_id="tok-1",
+            side=OrderSide.BUY,
+            size=10.0,
+            avg_price=0.40,
+            current_price=0.80,
+            unrealized_pnl=4.0,
+        )
+        executor = PositionAwareExecutor(
+            positions=[pos], sell_fill_fraction=0.5
+        )
+        # Use a strategy that generates BUY signals to check exited_market_ids
+        registry = _make_registry()
+
+        class ExitValuation:
+            async def assess_batch(
+                self,
+                markets: list[Market],
+                universe: list[Market] | None = None,
+                external_signals: object = None,
+            ) -> list[ValuationResult]:
+                return [
+                    ValuationResult(
+                        market_id=m.id,
+                        fair_value=0.30,
+                        market_price=0.80,
+                        edge=-0.50,
+                        confidence=0.8,
+                        fee_adjusted_edge=-0.50,
+                        recommendation=Recommendation.SELL,
+                    )
+                    for m in markets
+                ]
+
+        engine = ExecutionEngine(
+            executor=executor,
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=registry,
+            value_engine=ExitValuation(),
+        )
+        market = _make_market()
+        result = await engine.tick(markets=[market])
+
+        # Partial exit: market should NOT be in exited_market_ids
+        # so strategies can still generate signals (signals_generated > 0)
+        assert result.signals_generated > 0
+
+
+# --- Risk KB integration tests ---
+
+
+class TestRiskKBIntegration:
+    @pytest.mark.asyncio
+    async def test_risk_kb_populated_during_tick(self) -> None:
+        """Risk KB should receive upserts for each signal during tick."""
+        risk_kb = RiskKnowledgeBase(db_path=":memory:")
+        await risk_kb.init()
+
+        engine = ExecutionEngine(
+            executor=FakeExecutor(),
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=_make_registry(),
+            value_engine=FakeValueEngine(),
+            risk_kb=risk_kb,
+        )
+        market = _make_market()
+
+        result = await engine.tick(markets=[market])
+        assert result.signals_generated == 1
+
+        # Verify the KB was populated
+        record = await risk_kb.get("mkt-1")
+        assert record is not None
+        assert record.strategy_applied == "fake_strategy"
+        assert record.risk_level == RiskLevel.LOW  # edge=0.6 > 0.15
+        assert "Edge: 0.600" in record.risk_reason
+        assert "Confidence: 0.80" in record.risk_reason
+
+        await risk_kb.close()
+
+    @pytest.mark.asyncio
+    async def test_risk_kb_edge_thresholds(self) -> None:
+        """Verify correct risk levels for different edge amounts."""
+        risk_kb = RiskKnowledgeBase(db_path=":memory:")
+        await risk_kb.init()
+
+        # Strategy returning medium edge (0.10)
+        class MediumEdgeStrategy:
+            @property
+            def name(self) -> str:
+                return "medium_edge"
+
+            @property
+            def domain_filter(self) -> list[str]:
+                return []
+
+            async def evaluate(
+                self,
+                market: Market,
+                valuation: ValuationResult,
+                knowledge: object = None,
+            ) -> Signal | None:
+                return Signal(
+                    strategy=self.name,
+                    market_id=market.id,
+                    token_id="tok-1",
+                    signal_type=SignalType.BUY,
+                    confidence=0.7,
+                    market_price=0.50,
+                    edge_amount=0.10,
+                    reasoning="Medium edge",
+                )
+
+        registry = StrategyRegistry()
+        registry.register(MediumEdgeStrategy())  # type: ignore[arg-type]
+
+        engine = ExecutionEngine(
+            executor=FakeExecutor(),
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=registry,
+            value_engine=FakeValueEngine(),
+            risk_kb=risk_kb,
+        )
+
+        await engine.tick(markets=[_make_market()])
+        record = await risk_kb.get("mkt-1")
+        assert record is not None
+        assert record.risk_level == RiskLevel.MEDIUM  # 0.05 < 0.10 <= 0.15
+
+        await risk_kb.close()
+
+    @pytest.mark.asyncio
+    async def test_risk_kb_none_does_not_break_tick(self) -> None:
+        """When risk_kb is None, tick should work normally."""
+        engine = ExecutionEngine(
+            executor=FakeExecutor(),
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=_make_registry(),
+            value_engine=FakeValueEngine(),
+            risk_kb=None,
+        )
+
+        result = await engine.tick(markets=[_make_market()])
+        assert result.signals_generated == 1
+        assert result.orders_placed == 1
+
+    @pytest.mark.asyncio
+    async def test_risk_kb_error_does_not_break_tick(self) -> None:
+        """If risk_kb.upsert raises, the tick should still complete."""
+
+        class BrokenKB:
+            async def upsert(self, knowledge: object) -> None:
+                raise RuntimeError("DB write failed")
+
+        engine = ExecutionEngine(
+            executor=FakeExecutor(),
+            risk_manager=RiskManager(capital=150.0),
+            circuit_breaker=_make_cb(),
+            strategy_registry=_make_registry(),
+            value_engine=FakeValueEngine(),
+            risk_kb=BrokenKB(),
+        )
+
+        result = await engine.tick(markets=[_make_market()])
+        # Tick should complete normally despite KB errors
+        assert result.signals_generated == 1
+        assert result.orders_placed == 1

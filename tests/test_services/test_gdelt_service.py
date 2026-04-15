@@ -51,11 +51,11 @@ class TestBuildQueries:
     def test_builds_from_watchlist(self) -> None:
         service, _ = _make_service()
         queries = service._build_queries()
-        # Should include themes + actors + countries from default config
+        # Only themes are used (actors/countries excluded to stay within free-tier limits)
         assert "ELECTION" in queries
-        assert "USA" in queries
-        assert "US" in queries
-        assert len(queries) == 14  # 5 themes + 4 actors + 5 countries
+        assert "ECON_INFLATION" in queries
+        assert "WB_CONFLICT" in queries
+        assert len(queries) == 3  # 3 themes only (reduced for rate-limit budget)
 
 
 # ── Poll watchlist ────────────────────────────────────────────────────

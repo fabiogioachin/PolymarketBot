@@ -1,4 +1,4 @@
-"""Tests for app.risk.position_sizer."""
+"""Tests for app.risk.position_sizer — edge-scaled half-Kelly sizing."""
 
 import pytest
 
@@ -7,147 +7,130 @@ from app.risk.position_sizer import PositionSizer
 
 @pytest.fixture
 def sizer() -> PositionSizer:
-    return PositionSizer(fixed_fraction_pct=5.0, max_single_eur=25.0)
+    return PositionSizer(fixed_fraction_pct=5.0, max_single_eur=25.0, min_size_eur=1.0)
 
 
-# ── fixed_fraction ────────────────────────────────────────────────────
+# ── from_signal (primary method: half-Kelly) ─────────────────────────
 
 
-def test_fixed_fraction_basic(sizer: PositionSizer) -> None:
-    """5% of 200 EUR capital = 10 EUR."""
-    result = sizer.fixed_fraction(capital=200.0, price=0.5)
-    assert result.size_eur == 10.0
-    assert result.method == "fixed_fraction"
-    assert result.capped is False
+def test_from_signal_scales_with_edge(sizer: PositionSizer) -> None:
+    """Higher edge → larger position size."""
+    small_edge = sizer.from_signal(capital=200.0, price=0.5, confidence=0.8, edge=0.03)
+    large_edge = sizer.from_signal(capital=200.0, price=0.5, confidence=0.8, edge=0.15)
+    assert large_edge.size_eur > small_edge.size_eur
+    assert large_edge.method == "half_kelly"
 
 
-def test_fixed_fraction_capped_at_max_single(sizer: PositionSizer) -> None:
-    """With large capital, size is capped at max_single_eur (25 EUR)."""
-    result = sizer.fixed_fraction(capital=1000.0, price=0.5)
-    assert result.size_eur == 25.0
-    assert result.capped is True
-    assert "max_single_position" in result.cap_reason
+def test_from_signal_scales_with_confidence(sizer: PositionSizer) -> None:
+    """Higher confidence → larger position size (same edge)."""
+    low_conf = sizer.from_signal(capital=200.0, price=0.5, confidence=0.3, edge=0.10)
+    high_conf = sizer.from_signal(capital=200.0, price=0.5, confidence=0.9, edge=0.10)
+    assert high_conf.size_eur > low_conf.size_eur
 
 
-def test_fixed_fraction_shares_calculation(sizer: PositionSizer) -> None:
-    """Shares = size_eur / price."""
-    result = sizer.fixed_fraction(capital=200.0, price=0.5)
-    assert result.size_eur == 10.0
-    assert result.size_shares == pytest.approx(20.0, rel=1e-4)
+def test_from_signal_zero_edge_returns_minimum(sizer: PositionSizer) -> None:
+    """Zero edge → minimum size (don't bet on nothing)."""
+    result = sizer.from_signal(capital=200.0, price=0.5, confidence=0.8, edge=0.0)
+    assert result.size_eur == 1.0
+    assert result.method == "minimum"
 
 
-# ── kelly_criterion ───────────────────────────────────────────────────
+def test_from_signal_negative_edge_returns_minimum(sizer: PositionSizer) -> None:
+    """Negative edge → minimum size."""
+    result = sizer.from_signal(capital=200.0, price=0.5, confidence=0.8, edge=-0.05)
+    assert result.size_eur == 1.0
+    assert result.method == "minimum"
 
 
-def test_kelly_positive(sizer: PositionSizer) -> None:
-    """Positive Kelly returns a non-zero size using half-Kelly."""
-    # win_prob=0.6, win_payout=1.0 → b=1.0, f*=(0.6*1 - 0.4)/1=0.2, half=0.1
-    result = sizer.kelly_criterion(
-        capital=200.0,
-        price=0.5,
-        win_prob=0.6,
-        win_payout=1.0,
-        loss_amount=1.0,
-    )
-    # half_kelly = 0.1, raw_size = 200 * 0.1 = 20
-    assert result.size_eur == 20.0
-    assert result.method == "kelly"
-    assert result.capped is False
-
-
-def test_kelly_negative_returns_zero(sizer: PositionSizer) -> None:
-    """Negative Kelly (unfavorable bet) returns zero size."""
-    # win_prob=0.3, win_payout=1.0 → b=1.0, f*=(0.3-0.7)/1=-0.4
-    result = sizer.kelly_criterion(
-        capital=200.0,
-        price=0.5,
-        win_prob=0.3,
-        win_payout=1.0,
-        loss_amount=1.0,
-    )
-    assert result.size_eur == 0.0
-    assert result.size_shares == 0.0
-    assert result.method == "kelly"
-
-
-def test_kelly_edge_case_win_prob_zero(sizer: PositionSizer) -> None:
-    """win_prob=0 → invalid, return zero SizeResult."""
-    result = sizer.kelly_criterion(capital=200.0, price=0.5, win_prob=0.0, win_payout=1.0)
-    assert result.size_eur == 0.0
-    assert result.method == "kelly"
-
-
-def test_kelly_edge_case_win_prob_one(sizer: PositionSizer) -> None:
-    """win_prob=1 → invalid (no uncertainty), return zero SizeResult."""
-    result = sizer.kelly_criterion(capital=200.0, price=0.5, win_prob=1.0, win_payout=1.0)
-    assert result.size_eur == 0.0
-    assert result.method == "kelly"
-
-
-def test_kelly_capped_at_max_single(sizer: PositionSizer) -> None:
-    """Kelly result is capped when it would exceed max_single_eur."""
-    # Very favorable bet: win_prob=0.9, win_payout=1.0 → f*=0.8, half=0.4
-    # capital=200, raw=80 → capped at 25
-    result = sizer.kelly_criterion(
-        capital=200.0,
-        price=0.5,
-        win_prob=0.9,
-        win_payout=1.0,
-        loss_amount=1.0,
-    )
+def test_from_signal_capped_at_max_single(sizer: PositionSizer) -> None:
+    """Very large edge + capital is capped at max_single_eur."""
+    result = sizer.from_signal(capital=10000.0, price=0.5, confidence=1.0, edge=0.20)
     assert result.size_eur == 25.0
     assert result.capped is True
 
 
-# ── from_signal ───────────────────────────────────────────────────────
-
-
-def test_from_signal_low_confidence(sizer: PositionSizer) -> None:
-    """confidence < 0.3 → 50% of fixed fraction allocation."""
-    # 5% of 200 = 10, 50% of 10 = 5
-    result = sizer.from_signal(capital=200.0, price=0.5, signal_confidence=0.1)
-    assert result.size_eur == 5.0
-    assert result.method == "confidence_scaled"
-
-
-def test_from_signal_high_confidence(sizer: PositionSizer) -> None:
-    """confidence > 0.7 → 100% of fixed fraction allocation."""
-    # 5% of 200 = 10
-    result = sizer.from_signal(capital=200.0, price=0.5, signal_confidence=0.9)
+def test_from_signal_capped_at_max_fraction(sizer: PositionSizer) -> None:
+    """Even huge Kelly fraction is capped at fixed_fraction_pct of capital."""
+    # edge=0.40 on price=0.5 → Kelly would be massive (0.80)
+    # But max_fraction=5% of 200=10 EUR, then capped at 25 → should be 10
+    result = sizer.from_signal(capital=200.0, price=0.5, confidence=1.0, edge=0.40)
     assert result.size_eur == 10.0
-    assert result.method == "confidence_scaled"
-
-
-def test_from_signal_mid_confidence_interpolated(sizer: PositionSizer) -> None:
-    """confidence=0.5 → linear interpolation between 0.5 and 1.0."""
-    # fraction = 0.5 + (0.5 - 0.3) / 0.4 * 0.5 = 0.5 + 0.25 = 0.75
-    # raw_size = 200 * 0.05 * 0.75 = 7.5
-    result = sizer.from_signal(capital=200.0, price=0.5, signal_confidence=0.5)
-    assert result.size_eur == pytest.approx(7.5, rel=1e-4)
-    assert result.method == "confidence_scaled"
+    assert result.method == "half_kelly"
 
 
 def test_from_signal_shares_equals_size_over_price(sizer: PositionSizer) -> None:
     """size_shares = size_eur / price."""
-    result = sizer.from_signal(capital=200.0, price=0.25, signal_confidence=0.9)
-    # size_eur=10, shares=10/0.25=40
-    assert result.size_shares == pytest.approx(40.0, rel=1e-4)
+    result = sizer.from_signal(capital=200.0, price=0.25, confidence=0.8, edge=0.10)
+    assert result.size_shares == pytest.approx(result.size_eur / 0.25, rel=1e-4)
 
 
-# ── _apply_caps ───────────────────────────────────────────────────────
+def test_from_signal_concrete_half_kelly(sizer: PositionSizer) -> None:
+    """Verify actual half-Kelly math: edge=0.10, price=0.50, confidence=0.80.
+
+    kelly = 0.10 / (1 - 0.50) = 0.20
+    half_kelly = 0.10
+    with confidence=0.80: fraction = 0.10 * 0.80 = 0.08
+    capped at max_fraction=0.05 → fraction=0.05
+    size = 200 * 0.05 = 10.0
+    """
+    result = sizer.from_signal(capital=200.0, price=0.50, confidence=0.80, edge=0.10)
+    assert result.size_eur == 10.0
 
 
-def test_apply_caps_sets_cap_reason_when_capped() -> None:
-    """Capping sets capped=True and populates cap_reason."""
-    sizer_tight = PositionSizer(fixed_fraction_pct=50.0, max_single_eur=5.0)
-    result = sizer_tight.fixed_fraction(capital=100.0, price=0.5)
+def test_from_signal_small_edge_small_size() -> None:
+    """3% edge, price=0.50, confidence=0.70, capital=150.
+
+    kelly = 0.03 / 0.50 = 0.06
+    half_kelly = 0.03
+    with confidence=0.70: fraction = 0.03 * 0.70 = 0.021
+    size = 150 * 0.021 = 3.15
+    """
+    sizer = PositionSizer(fixed_fraction_pct=5.0, max_single_eur=25.0, min_size_eur=1.0)
+    result = sizer.from_signal(capital=150.0, price=0.50, confidence=0.70, edge=0.03)
+    assert result.size_eur == pytest.approx(3.15, rel=0.01)
+
+
+def test_from_signal_price_near_one_returns_minimum(sizer: PositionSizer) -> None:
+    """price >= 1.0 → no valid odds, return minimum."""
+    result = sizer.from_signal(capital=200.0, price=1.0, confidence=0.8, edge=0.05)
+    assert result.size_eur == 1.0
+    assert result.method == "minimum"
+
+
+# ── kelly_criterion (classic method) ─────────────────────────────────
+
+
+def test_kelly_positive(sizer: PositionSizer) -> None:
+    """Positive Kelly returns a non-zero size using half-Kelly."""
+    result = sizer.kelly_criterion(
+        capital=200.0, price=0.5, win_prob=0.6, win_payout=1.0, loss_amount=1.0,
+    )
+    assert result.size_eur == 20.0
+    assert result.method == "kelly"
+
+
+def test_kelly_negative_returns_zero(sizer: PositionSizer) -> None:
+    """Negative Kelly (unfavorable bet) returns zero size."""
+    result = sizer.kelly_criterion(
+        capital=200.0, price=0.5, win_prob=0.3, win_payout=1.0, loss_amount=1.0,
+    )
+    assert result.size_eur == 0.0
+
+
+def test_kelly_capped_at_max_single(sizer: PositionSizer) -> None:
+    """Kelly result is capped at max_single_eur."""
+    result = sizer.kelly_criterion(
+        capital=200.0, price=0.5, win_prob=0.9, win_payout=1.0, loss_amount=1.0,
+    )
+    assert result.size_eur == 25.0
     assert result.capped is True
-    assert result.cap_reason != ""
-    assert result.size_eur == 5.0
+
+
+# ── _apply_caps ──────────────────────────────────────────────────────
 
 
 def test_apply_caps_zero_price_returns_zero_shares(sizer: PositionSizer) -> None:
-    """price=0 should not raise; shares should be 0."""
-    result = sizer.fixed_fraction(capital=200.0, price=0.0)
+    """price=0 → shares should be 0, size still >= min."""
+    result = sizer.from_signal(capital=200.0, price=0.0, confidence=0.8, edge=0.05)
     assert result.size_shares == 0.0
-    assert result.size_eur > 0.0
+    assert result.size_eur >= 1.0

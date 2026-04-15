@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.execution.trade_store import TradeStore
 from app.models.intelligence import (
     GdeltArticle,
     GdeltEvent,
@@ -230,3 +231,86 @@ class TestAnomalyHistoryCap:
             await orch.tick()
 
         assert len(orch._anomaly_history) == 100
+
+
+# ── last_tick property ──────────────────────────────────────────────
+
+
+class TestLastTickProperty:
+    def test_none_before_tick(self) -> None:
+        orch = _make_orchestrator()
+        assert orch.last_tick is None
+
+    @pytest.mark.asyncio()
+    async def test_set_after_tick(self) -> None:
+        orch = _make_orchestrator()
+        await orch.tick()
+        assert orch.last_tick is not None
+        assert isinstance(orch.last_tick, datetime)
+
+
+# ── set_trade_store + persistence ───────────────────────────────────
+
+
+class TestAnomalyPersistence:
+    @pytest.mark.asyncio()
+    async def test_tick_persists_to_store(self) -> None:
+        """After wiring a trade_store, tick() persists reports."""
+        store = TradeStore(db_path=":memory:")
+        await store.init()
+
+        orch = _make_orchestrator(
+            gdelt_events=[_make_gdelt_event()],
+            news_items=[_make_news_item(relevance=0.8)],
+        )
+        await orch.set_trade_store(store)
+        await orch.tick()
+
+        rows = await store.load_anomaly_reports(10)
+        assert len(rows) == 1
+        assert rows[0]["total_anomalies"] == 2  # 1 gdelt + 1 news
+        await store.close()
+
+    @pytest.mark.asyncio()
+    async def test_set_trade_store_loads_history(self) -> None:
+        """set_trade_store loads existing reports into _anomaly_history."""
+        store = TradeStore(db_path=":memory:")
+        await store.init()
+
+        # Pre-populate store
+        for i in range(3):
+            await store.save_anomaly_report({
+                "detected_at": f"2026-04-14T{i:02d}:00:00+00:00",
+                "total_anomalies": i,
+                "events_json": "[]",
+                "news_json": "[]",
+            })
+
+        orch = _make_orchestrator()
+        await orch.set_trade_store(store)
+
+        assert len(orch._anomaly_history) == 3
+        await store.close()
+
+    @pytest.mark.asyncio()
+    async def test_tick_without_store_no_error(self) -> None:
+        """tick() works fine without a trade_store wired."""
+        orch = _make_orchestrator()
+        report = await orch.tick()
+        assert report.total_anomalies == 0
+
+    @pytest.mark.asyncio()
+    async def test_persist_failure_does_not_crash(self) -> None:
+        """If store.save_anomaly_report fails, tick() still completes."""
+        mock_store = AsyncMock()
+        mock_store.save_anomaly_report = AsyncMock(
+            side_effect=RuntimeError("DB error")
+        )
+        mock_store.load_anomaly_reports = AsyncMock(return_value=[])
+
+        orch = _make_orchestrator()
+        await orch.set_trade_store(mock_store)
+        report = await orch.tick()
+
+        assert report is not None
+        assert len(orch._anomaly_history) == 1

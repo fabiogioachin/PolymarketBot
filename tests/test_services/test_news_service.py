@@ -79,6 +79,87 @@ class TestFetchAllDedup:
         assert len(result) == 2
 
 
+class TestComputeRelevance:
+    def test_three_or_more_keywords(self) -> None:
+        # "election", "president", "congress" -> 3 matches -> 0.8
+        score = NewsService._compute_relevance(
+            "Election coverage: president addresses congress"
+        )
+        assert score == 0.8
+
+    def test_two_keywords(self) -> None:
+        # "bitcoin", "crypto" -> 2 matches -> 0.6
+        score = NewsService._compute_relevance("Bitcoin surges in crypto markets")
+        assert score == 0.6
+
+    def test_one_keyword(self) -> None:
+        # "tariff" -> 1 match -> 0.4
+        score = NewsService._compute_relevance("New tariff plan announced today")
+        assert score == 0.4
+
+    def test_no_keywords(self) -> None:
+        score = NewsService._compute_relevance("Cat videos go viral on the internet")
+        assert score == 0.1
+
+    def test_cross_domain_keywords(self) -> None:
+        # "election" (politics) + "inflation" (economics) + "war" (geopolitics) -> 3+ -> 0.8
+        score = NewsService._compute_relevance(
+            "Election impacts: war drives inflation higher"
+        )
+        assert score == 0.8
+
+
+class TestFetchAllRelevanceScore:
+    @pytest.mark.asyncio()
+    async def test_relevance_score_set_on_fetch(self) -> None:
+        """Items returned by fetch_all must have relevance_score > 0."""
+        items = [
+            _make_item(
+                title="Fed raises interest rate amid inflation concerns",
+            ),
+        ]
+        svc = NewsService()
+
+        with (
+            patch(
+                "app.services.news_service.rss_client.fetch_all_feeds",
+                new_callable=AsyncMock,
+                return_value=items,
+            ),
+            patch(
+                "app.services.news_service.institutional_client.fetch_all",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            result = await svc.fetch_all()
+
+        assert len(result) == 1
+        # "interest rate", "inflation", "fed" -> 3+ matches -> 0.8
+        assert result[0].relevance_score == 0.8
+
+    @pytest.mark.asyncio()
+    async def test_no_keyword_items_get_low_score(self) -> None:
+        items = [_make_item(title="Cat videos go viral")]
+        svc = NewsService()
+
+        with (
+            patch(
+                "app.services.news_service.rss_client.fetch_all_feeds",
+                new_callable=AsyncMock,
+                return_value=items,
+            ),
+            patch(
+                "app.services.news_service.institutional_client.fetch_all",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            result = await svc.fetch_all()
+
+        assert result[0].relevance_score == 0.1
+
+
 class TestClassifyDomain:
     def test_economics(self) -> None:
         domain = NewsService._classify_domain(

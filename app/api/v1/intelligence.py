@@ -3,17 +3,15 @@
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
+from app.core.dependencies import get_intelligence_orchestrator
 from app.core.logging import get_logger
 from app.models.intelligence import AnomalyReport
 from app.services.enrichment_service import EnrichmentResult, EnrichmentService
-from app.services.intelligence_orchestrator import IntelligenceOrchestrator
 
 logger = get_logger(__name__)
 
 router = APIRouter()
 
-# Module-level singletons (will be replaced by proper DI later)
-_orchestrator = IntelligenceOrchestrator()
 _enrichment = EnrichmentService()
 
 
@@ -46,7 +44,26 @@ async def get_anomalies(
     limit: int = Query(default=10, le=100),
 ) -> list[AnomalyReport]:
     """Get recent anomaly reports."""
-    return _orchestrator.get_recent_anomalies(limit=limit)
+    return get_intelligence_orchestrator().get_recent_anomalies(limit=limit)
+
+
+@router.get("/intelligence/news")
+async def get_news() -> list[dict]:
+    """Get cached RSS/institutional news items."""
+    orch = get_intelligence_orchestrator()
+    items = orch._news.get_cached()
+    return [
+        {
+            "title": item.title,
+            "source": item.source,
+            "domain": item.domain,
+            "published": item.published.isoformat() if item.published else None,
+            "url": item.url,
+            "summary": item.summary[:200] if item.summary else "",
+            "relevance_score": item.relevance_score,
+        }
+        for item in items[:30]
+    ]
 
 
 @router.get("/intelligence/watchlist", response_model=WatchlistResponse)

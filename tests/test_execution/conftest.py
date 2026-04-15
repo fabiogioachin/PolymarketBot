@@ -11,7 +11,12 @@ def _patch_yaml_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure strategy registry finds fake strategies as enabled."""
     cfg = AppConfig(
         strategies=StrategiesConfig(
-            enabled=["fake_strategy", "error_strategy", "multi_signal_strategy"],
+            enabled=[
+                "fake_strategy",
+                "error_strategy",
+                "multi_signal_strategy",
+                "medium_edge",
+            ],
             domain_filters={},
         )
     )

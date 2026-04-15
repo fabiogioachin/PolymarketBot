@@ -2,15 +2,29 @@
 
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.core.dependencies import get_risk_kb
+from app.core.dependencies import get_intelligence_orchestrator, get_risk_kb
+from app.core.logging import get_logger
+from app.core.yaml_config import app_config
 from app.knowledge.risk_kb import MarketKnowledge, RiskKnowledgeBase, RiskLevel
+
+_logger = get_logger(__name__)
 
 router = APIRouter()
 
 KBDep = Annotated[RiskKnowledgeBase, Depends(get_risk_kb)]
+
+_KNOWN_DOMAINS = [
+    "politics",
+    "geopolitics",
+    "economics",
+    "crypto",
+    "sports",
+    "science",
+]
 
 
 class NoteRequest(BaseModel):
@@ -97,3 +111,48 @@ async def list_risks(
         )
         for r in records
     ]
+
+
+@router.get("/knowledge/debug")
+async def knowledge_debug(kb: KBDep) -> dict:
+    """Diagnostic info for knowledge and intelligence subsystems."""
+    # Risk KB row count
+    all_records = await kb.get_all()
+    risk_kb_rows = len(all_records)
+
+    # Obsidian config
+    obsidian_enabled = app_config.intelligence.obsidian.enabled
+
+    # Obsidian reachability
+    obsidian_reachable = False
+    if obsidian_enabled:
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.get("http://localhost:27123/vault/")
+                obsidian_reachable = resp.status_code < 500
+        except Exception:
+            obsidian_reachable = False
+
+    # Pattern domains
+    pattern_counts = {d: 0 for d in _KNOWN_DOMAINS}
+
+    # Intelligence orchestrator state
+    last_intelligence_tick: str | None = None
+    anomaly_history_length = 0
+    try:
+        intel = get_intelligence_orchestrator()
+        if intel.last_tick is not None:
+            last_intelligence_tick = intel.last_tick.isoformat()
+        anomaly_history_length = len(intel._anomaly_history)
+    except Exception:
+        _logger.debug("intelligence_orchestrator_not_available")
+
+    return {
+        "risk_kb_rows": risk_kb_rows,
+        "obsidian_enabled": obsidian_enabled,
+        "obsidian_reachable": obsidian_reachable,
+        "pattern_folders": _KNOWN_DOMAINS,
+        "pattern_counts": pattern_counts,
+        "last_intelligence_tick": last_intelligence_tick,
+        "anomaly_history_length": anomaly_history_length,
+    }

@@ -129,6 +129,12 @@ function switchTab(tabId) {
   if (tabId === "config") {
     loadConfig();
   }
+  if (tabId === "intelligence") {
+    loadIntelligence();
+  }
+  if (tabId === "knowledge") {
+    loadKnowledge();
+  }
 }
 
 // ── Trading Tab — Rendering ──────────────────────────────────────────
@@ -443,6 +449,7 @@ function renderConfig(cfg) {
     pattern_kg: "Pattern KG",
     temporal: "Temporal",
     crowd_calibration: "Crowd Calibration",
+    cross_platform: "Cross Platform",
   });
 
   // Valuation thresholds
@@ -489,6 +496,214 @@ function renderConfigTable(tableId, data, labelMap) {
         '</div>';
     })
     .join("");
+}
+
+// ── Intelligence Tab ─────────────────────────────────────────────────
+
+async function loadIntelligence() {
+  clearError("intelligence");
+  try {
+    var results = await Promise.allSettled([
+      fetch("/api/v1/intelligence/anomalies").then(function (r) {
+        if (!r.ok) return { _apiError: r.status + " " + r.statusText };
+        return r.json();
+      }),
+      fetch("/api/v1/intelligence/watchlist").then(function (r) {
+        if (!r.ok) return { _apiError: r.status + " " + r.statusText };
+        return r.json();
+      }),
+      fetch("/api/v1/intelligence/news").then(function (r) {
+        if (!r.ok) return { _apiError: r.status + " " + r.statusText };
+        return r.json();
+      }),
+    ]);
+
+    var anomaliesRaw = results[0].status === "fulfilled" ? results[0].value : [];
+    var watchlistRaw = results[1].status === "fulfilled"
+        ? results[1].value
+        : { themes: [], actors: [], countries: [] };
+    var newsRaw = results[2].status === "fulfilled" ? results[2].value : [];
+
+    var anomalies = anomaliesRaw && anomaliesRaw._apiError ? [] : anomaliesRaw;
+    var watchlist = watchlistRaw && watchlistRaw._apiError
+        ? { themes: [], actors: [], countries: [] } : watchlistRaw;
+    var news = newsRaw && newsRaw._apiError ? [] : newsRaw;
+
+    // Render watchlist
+    var wlEl = document.getElementById("intel-watchlist");
+    if (wlEl) {
+      if (watchlistRaw && watchlistRaw._apiError) {
+        console.error("Watchlist API error:", watchlistRaw._apiError);
+        wlEl.innerHTML = '<div class="empty-state">API error: ' + escapeHtml(watchlistRaw._apiError) + '</div>';
+      } else if (watchlist.themes && watchlist.themes.length > 0) {
+        var html = '<div class="tag-list">';
+        watchlist.themes.forEach(function (t) {
+          html += '<span class="tag">' + escapeHtml(t) + "</span>";
+        });
+        if (watchlist.actors && watchlist.actors.length > 0) {
+          html +=
+            "<br/><small>Actors: " +
+            watchlist.actors.map(escapeHtml).join(", ") +
+            "</small>";
+        }
+        if (watchlist.countries && watchlist.countries.length > 0) {
+          html +=
+            "<br/><small>Countries: " +
+            watchlist.countries.map(escapeHtml).join(", ") +
+            "</small>";
+        }
+        html += "</div>";
+        wlEl.innerHTML = html;
+      } else {
+        wlEl.innerHTML =
+          '<div class="empty-state">No watchlist configured</div>';
+      }
+    }
+
+    // Render anomalies
+    var anEl = document.getElementById("intel-anomalies");
+    if (anEl) {
+      if (anomaliesRaw && anomaliesRaw._apiError) {
+        console.error("Anomalies API error:", anomaliesRaw._apiError);
+        anEl.innerHTML = '<div class="empty-state">API error: ' + escapeHtml(anomaliesRaw._apiError) + '</div>';
+      } else {
+        var withData = anomalies.filter(function (a) {
+          return a.total_anomalies > 0;
+        });
+        if (withData.length > 0) {
+          var html =
+            '<table class="data-table"><thead><tr>' +
+            "<th>Time</th><th>Events</th><th>News</th><th>Total</th>" +
+            "</tr></thead><tbody>";
+          withData.slice(0, 10).forEach(function (a) {
+            var time = new Date(a.detected_at).toLocaleTimeString();
+            html += "<tr><td>" + time + "</td>";
+            html += "<td>" + (a.events ? a.events.length : 0) + "</td>";
+            html += "<td>" + (a.news_items ? a.news_items.length : 0) + "</td>";
+            html += "<td>" + a.total_anomalies + "</td></tr>";
+          });
+          html += "</tbody></table>";
+          anEl.innerHTML = html;
+        } else {
+          anEl.innerHTML =
+            '<div class="empty-state">No anomalies detected. GDELT polls every 60 min \u2014 check back later.</div>';
+        }
+      }
+    }
+
+    // Render RSS news
+    var rssEl = document.getElementById("intel-rss");
+    if (rssEl) {
+      if (newsRaw && newsRaw._apiError) {
+        console.error("News API error:", newsRaw._apiError);
+        rssEl.innerHTML = '<div class="empty-state">API error: ' + escapeHtml(newsRaw._apiError) + '</div>';
+      } else if (news.length > 0) {
+        var html =
+          '<table class="data-table"><thead><tr>' +
+          "<th>Source</th><th>Title</th><th>Domain</th><th>Relevance</th>" +
+          "</tr></thead><tbody>";
+        news.slice(0, 20).forEach(function (n) {
+          var rel = n.relevance_score ? formatNum(n.relevance_score, 1) : "\u2014";
+          html += "<tr><td>" + escapeHtml(n.source || "") + "</td>";
+          html += "<td>" + truncate(n.title || "", 60) + "</td>";
+          html += "<td>" + escapeHtml(n.domain || "") + "</td>";
+          html += "<td>" + rel + "</td></tr>";
+        });
+        html += "</tbody></table>";
+        rssEl.innerHTML = html;
+      } else {
+        rssEl.innerHTML =
+          '<div class="empty-state">No RSS items cached \u2014 news refreshes every 30 min.</div>';
+      }
+    }
+  } catch (err) {
+    showError("intelligence", err.message);
+  }
+}
+
+// ── Knowledge Tab ────────────────────────────────────────────────────
+
+async function loadKnowledge() {
+  clearError("knowledge");
+  try {
+    var results = await Promise.allSettled([
+      fetch("/api/v1/knowledge/strategies").then(function (r) {
+        if (!r.ok) return { _apiError: r.status + " " + r.statusText };
+        return r.json();
+      }),
+      fetch("/api/v1/knowledge/risks").then(function (r) {
+        if (!r.ok) return { _apiError: r.status + " " + r.statusText };
+        return r.json();
+      }),
+    ]);
+
+    var strategiesRaw = results[0].status === "fulfilled" ? results[0].value : [];
+    var risksRaw = results[1].status === "fulfilled" ? results[1].value : [];
+
+    var strategies = strategiesRaw && strategiesRaw._apiError ? [] : strategiesRaw;
+    var risks = risksRaw && risksRaw._apiError ? [] : risksRaw;
+
+    // Render strategies
+    var stEl = document.getElementById("kb-strategies");
+    if (stEl) {
+      if (strategiesRaw && strategiesRaw._apiError) {
+        console.error("Strategies API error:", strategiesRaw._apiError);
+        stEl.innerHTML = '<div class="empty-state">API error: ' + escapeHtml(strategiesRaw._apiError) + '</div>';
+      } else if (strategies.length > 0) {
+        var html =
+          '<table class="data-table"><thead><tr>' +
+          "<th>Strategy</th><th>Markets</th>" +
+          "</tr></thead><tbody>";
+        strategies.forEach(function (s) {
+          html +=
+            "<tr><td>" +
+            escapeHtml(s.strategy) +
+            "</td><td>" +
+            s.market_count +
+            "</td></tr>";
+        });
+        html += "</tbody></table>";
+        stEl.innerHTML = html;
+      } else {
+        stEl.innerHTML =
+          '<div class="empty-state">No strategies active yet \u2014 data populates after the first tick with signals. Run <code>scripts/seed_patterns.py</code> to enable KG patterns.</div>';
+      }
+    }
+
+    // Render risks
+    var rkEl = document.getElementById("kb-risks");
+    if (rkEl) {
+      if (risksRaw && risksRaw._apiError) {
+        console.error("Risks API error:", risksRaw._apiError);
+        rkEl.innerHTML = '<div class="empty-state">API error: ' + escapeHtml(risksRaw._apiError) + '</div>';
+      } else if (risks.length > 0) {
+        var html =
+          '<table class="data-table"><thead><tr>' +
+          "<th>Market</th><th>Risk</th><th>Strategy</th><th>Reason</th>" +
+          "</tr></thead><tbody>";
+        risks.forEach(function (r) {
+          var levelClass =
+            r.risk_level === "high"
+              ? "negative"
+              : r.risk_level === "low"
+                ? "positive"
+                : "";
+          html += "<tr><td>" + escapeHtml(r.market_id) + "</td>";
+          html +=
+            '<td class="' + levelClass + '">' + escapeHtml(r.risk_level) + "</td>";
+          html += "<td>" + escapeHtml(r.strategy_applied || "") + "</td>";
+          html += "<td>" + truncate(r.risk_reason || "", 60) + "</td></tr>";
+        });
+        html += "</tbody></table>";
+        rkEl.innerHTML = html;
+      } else {
+        rkEl.innerHTML =
+          '<div class="empty-state">No risk profiles yet \u2014 data populates after the first tick with signals.</div>';
+      }
+    }
+  } catch (err) {
+    showError("knowledge", err.message);
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────

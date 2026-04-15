@@ -34,6 +34,41 @@ _SLIPPAGE_PER_100 = 0.002
 # Maximum fill as fraction of estimated market depth
 _MAX_FILL_DEPTH_PCT = 0.10  # don't fill more than 10% of visible depth
 
+# Bid-ask spread increases dramatically at extreme prices (illiquidity)
+# At price 0.50: spread ≈ 0.5%.  At price 0.01: spread ≈ 50%.  At price 0.001: spread ≈ 100%
+_MIN_SPREAD_PCT = 0.005  # 0.5% minimum spread at mid-price range
+
+
+def _estimate_spread(price: float) -> float:
+    """Estimate bid-ask spread based on price level.
+
+    Real Polymarket orderbooks are very thin at extreme prices (< 0.05 or > 0.95).
+    This models the liquidity premium: selling a 0.001 token is nearly impossible.
+    """
+    if price <= 0:
+        return 1.0
+    # Spread widens hyperbolically as price approaches 0 or 1
+    # At 0.50: ~0.5%, at 0.05: ~10%, at 0.01: ~50%, at 0.001: ~100%
+    distance_from_edge = min(price, 1.0 - price)
+    spread = _MIN_SPREAD_PCT / max(distance_from_edge, 0.001)
+    return min(spread, 1.0)  # cap at 100%
+
+
+def _estimate_depth(price: float, size: float) -> float:
+    """Estimate available orderbook depth at a given price level.
+
+    At extreme prices, there are very few counterparties willing to trade.
+    Returns max fillable shares.
+    """
+    if price <= 0.01:
+        # Sub-penny tokens: almost no liquidity
+        return min(size, 100.0)  # max 100 shares fillable
+    if price <= 0.05:
+        return min(size, 500.0)
+    if price <= 0.10:
+        return min(size, 2000.0)
+    return size  # mid-range: assume sufficient depth
+
 
 class PolymarketClobClient:
     """Realistic dry-run CLOB client.
@@ -79,26 +114,33 @@ class PolymarketClobClient:
         order_id = str(uuid4())
         now = datetime.now(tz=UTC)
 
-        # Calculate slippage-adjusted price
+        # Calculate spread and slippage-adjusted price
+        spread = _estimate_spread(order.price)
         order_value = order.price * order.size
         slippage = _SLIPPAGE_PER_100 * (order_value / 100.0)
-        if order.side == OrderSide.BUY:
-            fill_price = min(0.99, order.price + slippage)
-        else:
-            fill_price = max(0.01, order.price - slippage)
 
-        # Limit fill size by orderbook depth
+        if order.side == OrderSide.BUY:
+            # Buy at ask: price + half spread + slippage
+            fill_price = min(0.99, order.price * (1 + spread / 2) + slippage)
+        else:
+            # Sell at bid: price - half spread - slippage
+            fill_price = max(0.0001, order.price * (1 - spread / 2) - slippage)
+
+        # Limit fill size by orderbook depth (explicit or estimated)
         fill_size = order.size
         if orderbook_depth and orderbook_depth > 0:
             max_fill = orderbook_depth * _MAX_FILL_DEPTH_PCT
-            if fill_size > max_fill:
-                fill_size = max_fill
-                logger.info(
-                    "fill_size_limited",
-                    requested=order.size,
-                    filled=fill_size,
-                    depth=orderbook_depth,
-                )
+        else:
+            # Estimate depth based on price level
+            max_fill = _estimate_depth(order.price, order.size)
+        if fill_size > max_fill:
+            fill_size = max_fill
+            logger.info(
+                "fill_size_limited",
+                requested=order.size,
+                filled=fill_size,
+                price=order.price,
+            )
 
         cost = fill_price * fill_size
 

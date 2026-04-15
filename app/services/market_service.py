@@ -1,12 +1,12 @@
 """Market service: caching, filtering, and market data access."""
 
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.clients.polymarket_rest import polymarket_rest
 from app.core.logging import get_logger
-from app.models.market import Market, MarketCategory
+from app.models.market import Market, MarketCategory, MarketStatus, Outcome
 from app.services.market_scanner import MarketScanner
 
 logger = get_logger(__name__)
@@ -85,14 +85,129 @@ class MarketService:
 
         Note: Gamma API returns liquidity=0.0 for most markets, so we
         filter primarily on volume (min 100 USDC lifetime volume).
+        Falls back to static demo markets if the Polymarket API is unavailable.
         """
-        return await self.get_markets(
-            active=True,
-            limit=limit,
-            min_liquidity=min_liquidity,
-            min_volume=min_volume,
-            category=category,
-        )
+        try:
+            return await self.get_markets(
+                active=True,
+                limit=limit,
+                min_liquidity=min_liquidity,
+                min_volume=min_volume,
+                category=category,
+            )
+        except Exception as exc:
+            logger.warning("market_api_unavailable_using_demo", error=str(exc))
+            return self._demo_markets()
+
+    def _demo_markets(self) -> list[Market]:
+        """Return static demo markets for dry_run when Polymarket API is offline."""
+        now = datetime.now(tz=UTC)
+        return [
+            Market(
+                id="demo-politics-1",
+                question="Will Congress pass a major budget bill before the deadline?",
+                category=MarketCategory.POLITICS,
+                outcomes=[
+                    Outcome(token_id="demo-token-pol-1-yes", outcome="Yes", price=0.62),
+                    Outcome(token_id="demo-token-pol-1-no", outcome="No", price=0.38),
+                ],
+                end_date=now + timedelta(days=7),
+                volume=75_000.0,
+                liquidity=15_000.0,
+                status=MarketStatus.ACTIVE,
+            ),
+            Market(
+                id="demo-politics-2",
+                question="Will a third-party candidate win a US Senate seat this year?",
+                category=MarketCategory.POLITICS,
+                outcomes=[
+                    Outcome(token_id="demo-token-pol-2-yes", outcome="Yes", price=0.18),
+                    Outcome(token_id="demo-token-pol-2-no", outcome="No", price=0.82),
+                ],
+                end_date=now + timedelta(days=2),
+                volume=45_000.0,
+                liquidity=8_000.0,
+                status=MarketStatus.ACTIVE,
+            ),
+            Market(
+                id="demo-geopolitics-1",
+                question="Will there be a diplomatic breakthrough in the Ukraine conflict?",
+                category=MarketCategory.GEOPOLITICS,
+                outcomes=[
+                    Outcome(token_id="demo-token-geo-1-yes", outcome="Yes", price=0.28),
+                    Outcome(token_id="demo-token-geo-1-no", outcome="No", price=0.72),
+                ],
+                end_date=now + timedelta(days=14),
+                volume=120_000.0,
+                liquidity=25_000.0,
+                status=MarketStatus.ACTIVE,
+            ),
+            Market(
+                id="demo-economics-1",
+                question="Will the Federal Reserve announce a rate pause in the next meeting?",
+                category=MarketCategory.ECONOMICS,
+                outcomes=[
+                    Outcome(token_id="demo-token-eco-1-yes", outcome="Yes", price=0.58),
+                    Outcome(token_id="demo-token-eco-1-no", outcome="No", price=0.42),
+                ],
+                end_date=now + timedelta(days=10),
+                volume=200_000.0,
+                liquidity=40_000.0,
+                status=MarketStatus.ACTIVE,
+            ),
+            Market(
+                id="demo-economics-2",
+                question="Will US unemployment rise above 5% this quarter?",
+                category=MarketCategory.ECONOMICS,
+                outcomes=[
+                    Outcome(token_id="demo-token-eco-2-yes", outcome="Yes", price=0.32),
+                    Outcome(token_id="demo-token-eco-2-no", outcome="No", price=0.68),
+                ],
+                end_date=now + timedelta(days=2),
+                volume=55_000.0,
+                liquidity=12_000.0,
+                status=MarketStatus.ACTIVE,
+            ),
+            Market(
+                id="demo-crypto-1",
+                question="Will Bitcoin price exceed $90,000 this month?",
+                category=MarketCategory.CRYPTO,
+                outcomes=[
+                    Outcome(token_id="demo-token-cry-1-yes", outcome="Yes", price=0.52),
+                    Outcome(token_id="demo-token-cry-1-no", outcome="No", price=0.48),
+                ],
+                end_date=now + timedelta(days=20),
+                volume=300_000.0,
+                liquidity=60_000.0,
+                status=MarketStatus.ACTIVE,
+            ),
+            Market(
+                id="demo-sports-1",
+                question="Will the home team win the next major championship final?",
+                category=MarketCategory.SPORTS,
+                outcomes=[
+                    Outcome(token_id="demo-token-spt-1-yes", outcome="Yes", price=0.45),
+                    Outcome(token_id="demo-token-spt-1-no", outcome="No", price=0.55),
+                ],
+                end_date=now + timedelta(days=25),
+                volume=90_000.0,
+                liquidity=18_000.0,
+                status=MarketStatus.ACTIVE,
+            ),
+            Market(
+                id="demo-geopolitics-2",
+                question="Will NATO formally expand membership in the next six months?",
+                category=MarketCategory.GEOPOLITICS,
+                outcomes=[
+                    Outcome(token_id="demo-token-geo-2-yes", outcome="Yes", price=0.70),
+                    Outcome(token_id="demo-token-geo-2-no", outcome="No", price=0.30),
+                ],
+                end_date=now + timedelta(days=45),
+                volume=65_000.0,
+                liquidity=13_000.0,
+                status=MarketStatus.ACTIVE,
+            ),
+        ]
 
     async def get_market(self, market_id: str) -> Market:
         """Get a single market by ID, cached."""

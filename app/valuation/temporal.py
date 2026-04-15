@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 
 from app.core.logging import get_logger
-from app.models.market import Market, MarketCategory
+from app.models.market import Market, MarketCategory, TimeHorizon
 
 logger = get_logger(__name__)
 
@@ -18,6 +18,26 @@ _DECAY_RATES: dict[MarketCategory, float] = {
     MarketCategory.SCIENCE: 0.7,
     MarketCategory.OTHER: 0.7,
 }
+
+
+def classify_horizon(end_date: datetime | None) -> TimeHorizon:
+    """Classify a market's time horizon from its end_date.
+
+    - SHORT: < 3 days to resolution
+    - MEDIUM: 3-14 days
+    - LONG: 14-30 days
+    - SUPER_LONG: > 30 days or unknown
+    """
+    if end_date is None:
+        return TimeHorizon.SUPER_LONG
+    days = (end_date - datetime.now(tz=UTC)).total_seconds() / 86400
+    if days < 3:
+        return TimeHorizon.SHORT
+    if days < 14:
+        return TimeHorizon.MEDIUM
+    if days < 30:
+        return TimeHorizon.LONG
+    return TimeHorizon.SUPER_LONG
 
 
 class TemporalAnalyzer:

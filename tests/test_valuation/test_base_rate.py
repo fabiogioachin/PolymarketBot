@@ -136,7 +136,7 @@ async def test_base_rate_multiple_categories(db: ResolutionDB):
 
 
 async def test_get_prior_weak_prior(db: ResolutionDB):
-    """With <10 samples, shrinkage=0.3: leans toward market price."""
+    """With 5 samples (< 20), shrinkage=0.20: mostly trusts market price."""
     # 5 resolutions, all YES -> base_rate = 1.0
     for i in range(5):
         await db.add_resolution(_make_resolution(f"m{i}", "politics", True))
@@ -144,12 +144,12 @@ async def test_get_prior_weak_prior(db: ResolutionDB):
     analyzer = BaseRateAnalyzer(db)
     market = _make_market(category=MarketCategory.POLITICS, yes_price=0.6)
     prior = await analyzer.get_prior(market)
-    # shrinkage=0.3: 0.3 * 1.0 + 0.7 * 0.6 = 0.3 + 0.42 = 0.72
-    assert prior == pytest.approx(0.72)
+    # shrinkage=0.20: 0.20 * 1.0 + 0.80 * 0.6 = 0.20 + 0.48 = 0.68
+    assert prior == pytest.approx(0.68)
 
 
 async def test_get_prior_strong_prior(db: ResolutionDB):
-    """With 50+ samples, shrinkage=0.7: leans toward base rate."""
+    """With 50+ samples, shrinkage=0.50: equal weight base rate and market."""
     # 50 resolutions, 40 YES -> base_rate = 0.8
     for i in range(40):
         await db.add_resolution(_make_resolution(f"y{i}", "politics", True))
@@ -159,8 +159,8 @@ async def test_get_prior_strong_prior(db: ResolutionDB):
     analyzer = BaseRateAnalyzer(db)
     market = _make_market(category=MarketCategory.POLITICS, yes_price=0.6)
     prior = await analyzer.get_prior(market)
-    # shrinkage=0.7: 0.7 * 0.8 + 0.3 * 0.6 = 0.56 + 0.18 = 0.74
-    assert prior == pytest.approx(0.74)
+    # shrinkage=0.50: 0.50 * 0.8 + 0.50 * 0.6 = 0.40 + 0.30 = 0.70
+    assert prior == pytest.approx(0.70)
 
 
 async def test_compute_caches_rates(db: ResolutionDB):

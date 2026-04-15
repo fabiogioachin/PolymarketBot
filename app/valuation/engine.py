@@ -8,7 +8,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.core.yaml_config import app_config
-from app.models.market import Market, OrderBook, PriceHistory
+from app.models.market import Market, OrderBook, PriceHistory, TimeHorizon
 from app.models.valuation import (
     EdgeSource,
     Recommendation,
@@ -104,8 +104,10 @@ class ValueAssessmentEngine:
         scaled_edge = edge * temporal_factor
         fee_adjusted_edge = scaled_edge - market.fee_rate
 
-        # Recommendation
-        recommendation = self._recommend(fee_adjusted_edge, confidence)
+        # Recommendation (use per-horizon edge threshold)
+        recommendation = self._recommend(
+            fee_adjusted_edge, confidence, time_horizon=market.time_horizon
+        )
 
         result = ValuationResult(
             market_id=market.id,
@@ -372,18 +374,39 @@ class ValueAssessmentEngine:
 
         return round(fair_value, 4), sources, round(confidence, 4)
 
-    def _recommend(self, fee_adjusted_edge: float, confidence: float) -> Recommendation:
-        """Determine recommendation based on edge and confidence."""
+    def _recommend(
+        self,
+        fee_adjusted_edge: float,
+        confidence: float,
+        time_horizon: TimeHorizon | None = None,
+    ) -> Recommendation:
+        """Determine recommendation based on edge, confidence, and horizon.
+
+        Phase 10: uses per-horizon min_edge thresholds so short-term trades
+        can pass with a lower edge (fast turnover compensates), while
+        long-term trades require a higher edge (capital lockup cost).
+        """
         if confidence < self._thresholds.min_confidence:
             return Recommendation.HOLD  # not confident enough
 
+        # Resolve per-horizon edge threshold
+        min_edge = self._thresholds.min_edge  # fallback
+        if time_horizon == TimeHorizon.SHORT:
+            min_edge = self._thresholds.min_edge_short
+        elif time_horizon == TimeHorizon.MEDIUM:
+            min_edge = self._thresholds.min_edge_medium
+        elif time_horizon == TimeHorizon.LONG:
+            min_edge = self._thresholds.min_edge_long
+        elif time_horizon == TimeHorizon.SUPER_LONG:
+            min_edge = self._thresholds.min_edge_super_long
+
         if fee_adjusted_edge >= self._thresholds.strong_edge:
             return Recommendation.STRONG_BUY
-        elif fee_adjusted_edge >= self._thresholds.min_edge:
+        elif fee_adjusted_edge >= min_edge:
             return Recommendation.BUY
         elif fee_adjusted_edge <= -self._thresholds.strong_edge:
             return Recommendation.STRONG_SELL
-        elif fee_adjusted_edge <= -self._thresholds.min_edge:
+        elif fee_adjusted_edge <= -min_edge:
             return Recommendation.SELL
         else:
             return Recommendation.HOLD

@@ -67,6 +67,17 @@ class TestAppConfigDefaults:
         assert cfg.llm.max_daily_calls == 20
         assert cfg.llm.model == "claude-sonnet-4-6"
 
+    def test_gdelt_defaults(self) -> None:
+        cfg = AppConfig()
+        gdelt = cfg.intelligence.gdelt
+        assert gdelt.poll_interval_minutes == 60
+        assert gdelt.watchlist["themes"] == [
+            "ELECTION",
+            "ECON_INFLATION",
+            "WB_CONFLICT",
+        ]
+        assert len(gdelt.watchlist["themes"]) == 3
+
 
 class TestLoadConfig:
     def test_loads_from_example_yaml(self) -> None:

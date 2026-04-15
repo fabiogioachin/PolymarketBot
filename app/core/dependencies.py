@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.risk.circuit_breaker import CircuitBreaker
     from app.risk.manager import RiskManager
     from app.services.bot_service import BotService
+    from app.services.intelligence_orchestrator import IntelligenceOrchestrator
     from app.services.manifold_service import ManifoldService
     from app.services.market_service import MarketService
     from app.strategies.registry import StrategyRegistry
@@ -31,6 +32,7 @@ _value_engine: ValueAssessmentEngine | None = None
 _execution_engine: ExecutionEngine | None = None
 _bot_service: BotService | None = None
 _manifold_service: ManifoldService | None = None
+_intelligence_orchestrator: IntelligenceOrchestrator | None = None
 
 
 # ── Lazy accessors ───────────────────────────────────────────────────
@@ -57,6 +59,17 @@ async def get_manifold_service() -> ManifoldService | None:
         client = ManifoldClient(rate_limit=app_config.intelligence.manifold.rate_limit)
         _manifold_service = ManifoldService(client)
     return _manifold_service
+
+
+def get_intelligence_orchestrator() -> IntelligenceOrchestrator:
+    """Get IntelligenceOrchestrator singleton (GDELT + RSS pipeline)."""
+    global _intelligence_orchestrator  # noqa: PLW0603
+    if _intelligence_orchestrator is None:
+        from app.services.intelligence_orchestrator import IntelligenceOrchestrator
+
+        _intelligence_orchestrator = IntelligenceOrchestrator()
+        logger.info("intelligence_orchestrator_initialized")
+    return _intelligence_orchestrator
 
 
 async def get_risk_kb() -> RiskKnowledgeBase:
@@ -160,6 +173,25 @@ async def get_execution_engine() -> ExecutionEngine:
         manifold_service = await get_manifold_service()
         store = TradeStore()
         await store.init()
+
+        # Intelligence orchestrator: only if GDELT or RSS is enabled
+        intel_orch = None
+        if app_config.intelligence.gdelt.enabled or app_config.intelligence.rss.enabled:
+            intel_orch = get_intelligence_orchestrator()
+
+        # Wire trade_store into intelligence orchestrator for anomaly persistence
+        if intel_orch is not None:
+            await intel_orch.set_trade_store(store)
+
+        # Knowledge service (Obsidian KG patterns): only if Obsidian is enabled
+        knowledge_service = None
+        if app_config.intelligence.obsidian.enabled:
+            from app.services.knowledge_service import KnowledgeService
+
+            knowledge_service = KnowledgeService()
+
+        risk_kb = await get_risk_kb()
+
         _execution_engine = ExecutionEngine(
             executor=executor,
             risk_manager=get_risk_manager(),
@@ -169,6 +201,9 @@ async def get_execution_engine() -> ExecutionEngine:
             market_service=get_market_service(),
             trade_store=store,
             manifold_service=manifold_service,
+            intelligence_orchestrator=intel_orch,
+            knowledge_service=knowledge_service,
+            risk_kb=risk_kb,
         )
         await _execution_engine.restore_from_store()
     return _execution_engine

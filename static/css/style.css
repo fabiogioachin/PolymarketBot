@@ -537,6 +537,59 @@ tbody td.label {
   letter-spacing: 0.4px;
 }
 
+/* ── Data tables (Intelligence / Knowledge) ─────────── */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table thead th {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.data-table tbody td {
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.data-table tbody td.positive {
+  color: var(--accent-green);
+}
+
+.data-table tbody td.negative {
+  color: var(--accent-red);
+}
+
+/* ── Empty state ────────────────────────────────────── */
+
+.empty-state {
+  text-align: center;
+  padding: 24px 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
 /* ── Equity chart placeholder ────────────────────────── */
 
 .chart-placeholder {

@@ -1,9 +1,16 @@
 """Polymarket market data models."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
+
+
+class TimeHorizon(StrEnum):
+    SHORT = "short"          # < 3 days
+    MEDIUM = "medium"        # 3-14 days
+    LONG = "long"            # 14-30 days
+    SUPER_LONG = "super_long"  # > 30 days
 
 
 class MarketStatus(StrEnum):
@@ -75,6 +82,21 @@ class Market(BaseModel):
     updated_at: datetime | None = None
     fee_rate: float = 0.0  # 0% for geopolitics, 7.2% for crypto, etc.
     tags: list[str] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def time_horizon(self) -> TimeHorizon:
+        """Classify market by time to resolution."""
+        if self.end_date is None:
+            return TimeHorizon.SUPER_LONG  # no deadline = maximum uncertainty
+        days = (self.end_date - datetime.now(tz=UTC)).total_seconds() / 86400
+        if days < 3:
+            return TimeHorizon.SHORT
+        if days < 14:
+            return TimeHorizon.MEDIUM
+        if days < 30:
+            return TimeHorizon.LONG
+        return TimeHorizon.SUPER_LONG
 
 
 class PricePoint(BaseModel):

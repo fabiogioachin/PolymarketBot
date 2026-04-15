@@ -222,3 +222,63 @@ async def test_stream_build_full_state_structure() -> None:
     trades = state["trades"]
     assert "trades" in trades
     assert "total" in trades
+
+
+# ── Regression: R1 — win_rate on closed trades only ──────────────────
+
+
+class TestWinRateRegression:
+    """R1: _win_rate must compute percentage on closed trades only, ignoring opens."""
+
+    def test_win_rate_on_closed_trades_only(self) -> None:
+        """Win rate counts only type=close trades, not opens."""
+        from app.monitoring.dashboard import _win_rate
+
+        trade_log: list[dict[str, object]] = [
+            # 3 open trades (pnl=0.0) — should be ignored
+            {"type": "open", "pnl": 0.0, "market_id": "m1"},
+            {"type": "open", "pnl": 0.0, "market_id": "m2"},
+            {"type": "open", "pnl": 0.0, "market_id": "m3"},
+            # 2 close trades: 1 win (+5.0), 1 loss (-2.0)
+            {"type": "close", "pnl": 5.0, "market_id": "m4"},
+            {"type": "close", "pnl": -2.0, "market_id": "m5"},
+        ]
+
+        win_rate = _win_rate(trade_log)
+
+        # 1 win / 2 closes = 50.0%
+        assert win_rate == 50.0
+        # Must NOT be 40.0 (which would happen if counting all 5 entries)
+        assert win_rate != 40.0
+
+    def test_win_rate_returns_percentage_not_fraction(self) -> None:
+        """Win rate is expressed as percentage (0-100), not fraction (0-1)."""
+        from app.monitoring.dashboard import _win_rate
+
+        trade_log: list[dict[str, object]] = [
+            {"type": "close", "pnl": 10.0, "market_id": "m1"},
+        ]
+
+        win_rate = _win_rate(trade_log)
+        assert win_rate == 100.0
+        assert win_rate != 1.0
+
+    def test_win_rate_empty_log(self) -> None:
+        """No closed trades returns 0.0."""
+        from app.monitoring.dashboard import _win_rate
+
+        assert _win_rate([]) == 0.0
+        assert _win_rate([{"type": "open", "pnl": 0.0}]) == 0.0
+
+    def test_win_rate_ignores_partial_exits(self) -> None:
+        """Partial exits are not counted as closes."""
+        from app.monitoring.dashboard import _win_rate
+
+        trade_log: list[dict[str, object]] = [
+            {"type": "partial_exit", "pnl": 1.0, "market_id": "m1"},
+            {"type": "close", "pnl": -3.0, "market_id": "m2"},
+        ]
+
+        win_rate = _win_rate(trade_log)
+        # Only 1 close (a loss), partial_exit ignored → 0%
+        assert win_rate == 0.0

@@ -189,54 +189,56 @@
 
     <!-- ── Intelligence Tab ───────────────────────────────────────── -->
     <div id="tab-intelligence" class="tab-content">
+      <div id="error-intelligence" class="error-banner"></div>
       <div class="two-col">
         <div class="card">
-          <div class="card-title">Event Timeline</div>
-          <div class="placeholder">
-            <div class="placeholder-icon">&#128240;</div>
-            Event timeline will appear here once the intelligence pipeline is active.
+          <div class="card-title">GDELT Watchlist</div>
+          <div id="intel-watchlist" class="placeholder">
+            <div class="placeholder-icon">&#128202;</div>
+            Loading watchlist...
           </div>
         </div>
         <div class="card">
-          <div class="card-title">GDELT Anomalies</div>
-          <div class="placeholder">
-            <div class="placeholder-icon">&#128202;</div>
-            GDELT anomaly detection results will appear here.
+          <div class="card-title">Recent Anomalies</div>
+          <div id="intel-anomalies" class="placeholder">
+            <div class="placeholder-icon">&#128240;</div>
+            Loading anomalies...
           </div>
         </div>
       </div>
       <div class="card">
         <div class="card-title">RSS Feed Activity</div>
-        <div class="placeholder">
+        <div id="intel-rss" class="placeholder">
           <div class="placeholder-icon">&#128279;</div>
-          RSS feed headlines and parsed signals will appear here.
+          Loading news feed...
         </div>
       </div>
     </div>
 
     <!-- ── Knowledge Tab ──────────────────────────────────────────── -->
     <div id="tab-knowledge" class="tab-content">
+      <div id="error-knowledge" class="error-banner"></div>
       <div class="two-col">
         <div class="card">
-          <div class="card-title">Risk Profiles</div>
-          <div class="placeholder">
+          <div class="card-title">Active Strategies</div>
+          <div id="kb-strategies" class="placeholder">
             <div class="placeholder-icon">&#9888;</div>
-            Market risk profiles from the Knowledge Base will appear here.
+            Loading strategies...
           </div>
         </div>
         <div class="card">
-          <div class="card-title">Pattern Library</div>
-          <div class="placeholder">
+          <div class="card-title">Risk Profiles</div>
+          <div id="kb-risks" class="placeholder">
             <div class="placeholder-icon">&#128300;</div>
-            Historical patterns and their hit rates will appear here.
+            Loading risk profiles...
           </div>
         </div>
       </div>
       <div class="card">
         <div class="card-title">Obsidian Knowledge Graph</div>
-        <div class="placeholder">
+        <div id="kb-obsidian" class="placeholder">
           <div class="placeholder-icon">&#128218;</div>
-          Connected KG nodes from Obsidian will appear here.
+          Knowledge graph patterns will appear once Obsidian vault is seeded.
         </div>
       </div>
     </div>

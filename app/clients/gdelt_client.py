@@ -18,7 +18,7 @@ class GdeltClient:
     """Async HTTP client for GDELT APIs with rate limiting and retry."""
 
     def __init__(
-        self, rate_limit: int = 5, max_retries: int = 3, backoff: float = 2.0
+        self, rate_limit: int = 1, max_retries: int = 1, backoff: float = 5.0
     ) -> None:
         self._client: httpx.AsyncClient | None = None
         self._semaphore = asyncio.Semaphore(rate_limit)

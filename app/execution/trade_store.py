@@ -5,7 +5,6 @@ Survives restarts. The execution engine reads on init and writes after each tick
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import aiosqlite
@@ -51,6 +50,17 @@ CREATE TABLE IF NOT EXISTS engine_state (
 )
 """
 
+_CREATE_INTELLIGENCE_EVENTS = """
+CREATE TABLE IF NOT EXISTS intelligence_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    detected_at TEXT NOT NULL,
+    total_anomalies INTEGER DEFAULT 0,
+    events_json TEXT DEFAULT '[]',
+    news_json TEXT DEFAULT '[]',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 class TradeStore:
     """Async SQLite store for trades and positions."""
@@ -67,6 +77,7 @@ class TradeStore:
         await self._conn.execute(_CREATE_TRADES)
         await self._conn.execute(_CREATE_POSITIONS)
         await self._conn.execute(_CREATE_STATE)
+        await self._conn.execute(_CREATE_INTELLIGENCE_EVENTS)
         await self._conn.commit()
         logger.info("trade_store_initialized", path=self._db_path)
 
@@ -181,6 +192,42 @@ class TradeStore:
         )
         row = await cursor.fetchone()
         return row["value"] if row else default
+
+    # ── Intelligence events ────────────────────────────────────────────
+
+    async def save_anomaly_report(self, report: dict[str, object]) -> None:
+        """Persist an anomaly report from the intelligence pipeline."""
+        conn = self._ensure()
+        await conn.execute(
+            """INSERT INTO intelligence_events
+               (detected_at, total_anomalies, events_json, news_json)
+               VALUES (?, ?, ?, ?)""",
+            (
+                str(report.get("detected_at", "")),
+                int(report.get("total_anomalies", 0)),
+                str(report.get("events_json", "[]")),
+                str(report.get("news_json", "[]")),
+            ),
+        )
+        await conn.commit()
+
+    async def load_anomaly_reports(self, limit: int = 100) -> list[dict[str, object]]:
+        """Load recent anomaly reports, newest first."""
+        conn = self._ensure()
+        cursor = await conn.execute(
+            "SELECT * FROM intelligence_events ORDER BY detected_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "detected_at": row["detected_at"],
+                "total_anomalies": row["total_anomalies"],
+                "events_json": row["events_json"],
+                "news_json": row["news_json"],
+            }
+            for row in rows
+        ]
 
     async def close(self) -> None:
         if self._conn:

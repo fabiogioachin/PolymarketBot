@@ -47,8 +47,12 @@ class InstitutionalClient:
         items: list[NewsItem] = []
         for doc in data.get("results", []):
             published = self._parse_date(doc.get("publication_date"))
-            agencies_raw = doc.get("agencies")
-            tags: list[str] = agencies_raw if isinstance(agencies_raw, list) else []
+            agencies_raw = doc.get("agencies") or []
+            tags: list[str] = [
+                a.get("raw_name", "") if isinstance(a, dict) else str(a)
+                for a in agencies_raw
+                if a
+            ]
 
             items.append(
                 NewsItem(

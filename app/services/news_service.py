@@ -107,6 +107,11 @@ class NewsService:
             if not item.domain:
                 item.domain = self._classify_domain(item.title + " " + item.summary)
 
+            # Compute relevance score from keyword density
+            item.relevance_score = self._compute_relevance(
+                item.title + " " + item.summary
+            )
+
             deduped.append(item)
 
         deduped.sort(
@@ -140,6 +145,31 @@ class NewsService:
     def _normalize_title(title: str) -> str:
         """Normalize title for dedup comparison."""
         return _NON_ALNUM_RE.sub("", title.lower())
+
+    @staticmethod
+    def _compute_relevance(text: str) -> float:
+        """Score text relevance based on keyword density across all domains.
+
+        Returns a float between 0.1 and 0.8:
+        - 3+ keyword matches -> 0.8
+        - 2 matches -> 0.6
+        - 1 match -> 0.4
+        - 0 matches -> 0.1
+        """
+        text_lower = text.lower()
+        match_count = sum(
+            1
+            for keywords in _DOMAIN_KEYWORDS.values()
+            for kw in keywords
+            if kw in text_lower
+        )
+        if match_count >= 3:
+            return 0.8
+        if match_count == 2:
+            return 0.6
+        if match_count == 1:
+            return 0.4
+        return 0.1
 
     @staticmethod
     def _classify_domain(text: str) -> str:

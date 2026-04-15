@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 from app.clients.gdelt_client import GdeltClient, gdelt_client
@@ -41,6 +42,8 @@ class GdeltService:
                     events.append(event)
             except Exception:
                 logger.warning("gdelt_query_failed", query=query)
+            # Delay between queries to stay within GDELT free-tier rate limits
+            await asyncio.sleep(10)
 
         self._last_poll = datetime.now(tz=UTC)
         logger.info(
@@ -76,15 +79,13 @@ class GdeltService:
         logger.info("baselines_updated", count=len(self._baselines))
 
     def _build_queries(self) -> list[str]:
-        """Build GDELT query strings from watchlist config."""
-        queries: list[str] = []
-        for theme in self._watchlist.get("themes", []):
-            queries.append(theme)
-        for actor in self._watchlist.get("actors", []):
-            queries.append(actor)
-        for country in self._watchlist.get("countries", []):
-            queries.append(country)
-        return queries
+        """Build GDELT query strings from watchlist config.
+
+        Only uses themes (most informative, 5 queries). Actors and countries
+        are too granular for the free tier's rate limits and would block the
+        tick cycle for 3+ minutes with sequential retry backoff.
+        """
+        return list(self._watchlist.get("themes", []))
 
     async def _check_query(self, query: str) -> GdeltEvent | None:
         """Check a single query for anomalies."""

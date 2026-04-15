@@ -1,6 +1,10 @@
 """Intelligence orchestrator: coordinates GDELT, RSS, and KG for event detection."""
 
+from __future__ import annotations
+
+import json
 from datetime import UTC, datetime
+from typing import Any
 
 from app.core.logging import get_logger
 from app.models.intelligence import AnomalyReport, GdeltEvent
@@ -20,12 +24,40 @@ class IntelligenceOrchestrator:
         gdelt_service: GdeltService | None = None,
         news_service: NewsService | None = None,
         knowledge_service: KnowledgeService | None = None,
+        trade_store: Any = None,
     ) -> None:
         self._gdelt = gdelt_service or GdeltService()
         self._news = news_service or NewsService()
         self._knowledge = knowledge_service or KnowledgeService()
         self._last_tick: datetime | None = None
         self._anomaly_history: list[AnomalyReport] = []
+        self._trade_store = trade_store
+
+    @property
+    def last_tick(self) -> datetime | None:
+        """Timestamp of the last intelligence tick."""
+        return self._last_tick
+
+    async def set_trade_store(self, store: Any) -> None:
+        """Wire the trade store for anomaly persistence and load history."""
+        self._trade_store = store
+        try:
+            reports = await store.load_anomaly_reports(100)
+            for r in reports:
+                report = AnomalyReport(
+                    detected_at=datetime.fromisoformat(str(r["detected_at"])),
+                    events=[],
+                    news_items=[],
+                    total_anomalies=int(r["total_anomalies"]),
+                )
+                self._anomaly_history.append(report)
+            if reports:
+                logger.info(
+                    "anomaly_history_loaded",
+                    count=len(reports),
+                )
+        except Exception:
+            logger.warning("anomaly_history_load_failed", exc_info=True)
 
     async def tick(self) -> AnomalyReport:
         """Execute one intelligence cycle.
@@ -61,6 +93,24 @@ class IntelligenceOrchestrator:
         # Keep last 100 reports
         if len(self._anomaly_history) > 100:
             self._anomaly_history = self._anomaly_history[-100:]
+
+        # Persist to SQLite
+        if self._trade_store is not None:
+            try:
+                await self._trade_store.save_anomaly_report({
+                    "detected_at": report.detected_at.isoformat()
+                    if report.detected_at
+                    else now.isoformat(),
+                    "total_anomalies": report.total_anomalies,
+                    "events_json": json.dumps(
+                        [e.model_dump(mode="json") for e in report.events]
+                    ),
+                    "news_json": json.dumps(
+                        [n.model_dump(mode="json") for n in report.news_items]
+                    ),
+                })
+            except Exception as exc:
+                logger.warning("anomaly_persist_failed", error=str(exc))
 
         self._last_tick = now
         logger.info(

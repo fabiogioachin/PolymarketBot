@@ -40,23 +40,31 @@ class BaseRateAnalyzer:
         """Get prior probability for a market.
 
         Uses base rate as starting point. If the market has outcomes with prices,
-        adjusts slightly toward market consensus (Bayesian shrinkage toward prior).
+        adjusts toward market consensus (Bayesian shrinkage).
+
+        Key principle: without historical data, trust the market price.
+        The market aggregates all public information — our uninformed 50% prior
+        should NOT override it. Only deviate from market price when we have
+        real evidence (historical resolution data for this category).
         """
         base_rate = await self.get_base_rate(market)
 
-        # If we have very few historical observations, lean more on market price
+        # Shrinkage toward base_rate scales with evidence strength.
+        # Without evidence, the market price IS the best estimate.
         count = await self._db.get_resolution_count(category=market.category.value)
-        if count < 10:
-            # Weak prior — give more weight to market consensus
-            shrinkage = 0.3  # 30% prior, 70% market
+        if count < 5:
+            # No meaningful evidence — mostly trust the market,
+            # but allow small deviation for other signals to work
+            shrinkage = 0.10  # 10% prior, 90% market
+        elif count < 20:
+            shrinkage = 0.20
         elif count < 50:
-            shrinkage = 0.5
+            shrinkage = 0.30
         else:
-            shrinkage = 0.7  # Strong prior — 70% historical, 30% market
+            shrinkage = 0.50  # Strong prior — 50% historical, 50% market
 
         market_price = 0.5
         if market.outcomes:
-            # Use YES outcome price as market's implied probability
             for outcome in market.outcomes:
                 if outcome.outcome.lower() == "yes":
                     market_price = outcome.price

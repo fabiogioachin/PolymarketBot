@@ -96,19 +96,24 @@ def evaluate_exit(
         time_left = market.end_date - datetime.now(tz=UTC)
         if time_left < timedelta(hours=_FLATTEN_HOURS):
             hours = time_left.total_seconds() / 3600
-            # If price collapsed near expiry, the bet is almost certainly losing
-            if current < _COLLAPSE_PRICE:
+            # If price collapsed near expiry, the bet is almost certainly losing.
+            # "Collapsed" means it DROPPED significantly from entry, not just that
+            # the absolute price is low. A token bought at 0.003 still at 0.002
+            # hasn't collapsed — it was always a long-shot bet.
+            price_dropped = entry > 0 and current < entry * 0.5
+            if current < _COLLAPSE_PRICE and price_dropped:
                 return ExitDecision(
                     should_exit=True,
                     reason=(
                         f"Expiry in {hours:.1f}h, price collapsed to {current:.3f} "
-                        f"— likely losing"
+                        f"from entry {entry:.3f} — likely losing"
                     ),
                     urgency=0.9,
                 )
-            # Even if price is ok, flatten near expiry to avoid resolution risk
-            # unless we're very confident (price > 0.8 means market agrees with us)
-            if current < 0.80:
+            # Flatten near expiry ONLY for mid-range positions (0.10-0.80).
+            # Very low prices (< 0.10) are cheap long-shot bets — let them ride
+            # to resolution. The downside is capped at the small entry cost.
+            if 0.10 <= current < 0.80:
                 return ExitDecision(
                     should_exit=True,
                     reason=f"Expiry in {hours:.1f}h — flattening to avoid resolution risk",

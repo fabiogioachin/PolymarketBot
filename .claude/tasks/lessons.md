@@ -43,5 +43,31 @@ Lessons that affect future tasks. Target: under 15 entries.
 **Root cause**: Original design only supported signals computed internally by the engine (base_rate, microstructure, etc.), not externally-provided per-market signals.
 **Action**: The `external_signals` pattern is now the standard way to inject per-market signals from satellite sources. Use it for any future data integrations.
 
+### 2026-04-14 — [codebase] IntelligenceOrchestrator must be wired into DI + tick cycle
+
+**Context**: Docker debugging session — intelligence pipeline not producing event_signal data
+**What happened**: GDELT/RSS services were fully implemented but IntelligenceOrchestrator was never registered in dependencies.py, never injected into ExecutionEngine, and never called during tick(). The event_signal weight (0.15) was allocated but unused.
+**Root cause**: Intelligence pipeline was built as an API-only service; nobody wired it into the execution loop.
+**Action**: Added `get_intelligence_orchestrator()` to dependencies.py and `_fetch_intelligence_signals()` to ExecutionEngine. The external_signals pattern already supported event_signal — just needed the data to flow.
+
+### 2026-04-14 — [codebase] CLOB simulation sell-price floor created fake arbitrage
+
+**Context**: Dashboard showed 100% win rate, 150→580 EUR in minutes. User correctly flagged as unrealistic.
+**What happened**: `max(0.01, order.price - slippage)` guaranteed minimum sell price of 0.01. Tokens bought at 0.001 were sold at 0.01 = 10x guaranteed return. This repeated every tick (buy→exit→rebuy cycle).
+**Root cause**: The 0.01 floor was meant to prevent negative prices but created artificial arbitrage for sub-penny tokens. No liquidity/spread simulation.
+**Action**: Removed artificial floor (`max(0.0001, ...)`). Added `_estimate_spread()` (hyperbolically wider at extreme prices) and `_estimate_depth()` (max 100 shares at <0.01). Sub-penny tokens now have 50-100% spread and capped depth.
+
+### 2026-04-14 — [codebase] Federal Register API returns agencies as list[dict], not list[str]
+**Context**: Intelligence tick failed with Pydantic validation on NewsItem.tags
+**What happened**: `institutional_client.py` passed `doc.get("agencies")` directly to NewsItem.tags, but the Federal Register API returns agencies as `[{"raw_name": "...", ...}]`.
+**Root cause**: No type coercion when extracting tags from the API response.
+**Action**: Extract `a.get("raw_name")` from each agency dict. Always validate external API payloads against your Pydantic models, especially list fields.
+
 ## Archive
 Resolved or one-off entries. Not read by agents.
+
+### 2026-04-06 — [codebase] Duplicate enum: TimeHorizon in two model files
+**Context**: Phase 10 added `TimeHorizon` enum to `models/market.py`
+**What happened**: `TimeHorizon` already existed in `models/intelligence.py` (from Phase 3). Now two identical enums exist, imported by different modules. Health scan caught it (DEAD-15).
+**Root cause**: Did not grep for existing `TimeHorizon` definition before creating a new one.
+**Action**: Consolidated to `models/market.py`, `intelligence.py` re-exports. Always grep for existing definitions before adding enums/classes. RESOLVED via /refactor 2026-04-06.

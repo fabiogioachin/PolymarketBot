@@ -1,15 +1,12 @@
 """Intelligence pipeline data models."""
 
 from datetime import datetime
-from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-
-class TimeHorizon(StrEnum):
-    SHORT = "short"  # hours to days
-    MEDIUM = "medium"  # days to weeks
-    LONG = "long"  # weeks to months
+# Canonical TimeHorizon definition lives in models.market (Phase 10).
+# Re-exported here for backward compatibility with intelligence importers.
+from app.models.market import TimeHorizon  # noqa: F401
 
 
 class GdeltArticle(BaseModel):

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.core.logging import get_logger
-from app.models.order import Balance, OrderRequest, OrderResult, OrderSide, OrderStatus, Position
+from app.models.order import Balance, OrderRequest, OrderResult, OrderStatus, Position
 
 logger = get_logger(__name__)
 
@@ -75,6 +75,4 @@ class LiveExecutor:
         return self._connected
 
 
-# Satisfy the type checker that LiveExecutor exposes OrderSide (imported for re-use in tests).
 __all__ = ["LiveExecutor"]
-_ = OrderSide  # keep import alive for type resolution

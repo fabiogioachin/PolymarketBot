@@ -31,10 +31,10 @@
 - `config/` — YAML configuration (config.example.yaml, no config.yaml in repo)
 - `scripts/` — standalone scripts (ingest, calibration, vault setup, seed patterns)
 - `static/` — dark-theme SPA dashboard (vanilla JS)
-- `tests/` — mirrors app/ structure, 657+ tests
+- `tests/` — mirrors app/ structure, 687+ tests
 
 ## Project Structure (`.claude/`)
-- `.claude/tasks/todo.md` — canonical project task tracker (Phase 0-9)
+- `.claude/tasks/todo.md` — canonical project task tracker (Phase 0-10)
 - `.claude/tasks/lessons.md` — lessons learned across sessions (7 active entries)
 - `.claude/skills/` — 9 project skills (see Skills section below)
 
@@ -47,10 +47,14 @@
 - Imports: absolute from app root (e.g., `from app.core.config import settings`)
 - Strategies return `Signal | list[Signal] | None` (multi-leg trades like arbitrage return lists)
 - Signal must always carry `market_price` — engine uses it for orders, not edge_amount
-- All singletons wired in `app/core/dependencies.py` — register new services there
+- All singletons wired in `app/core/dependencies.py` — register new services there (includes IntelligenceOrchestrator)
 - Position exits handled by `app/execution/position_monitor.py` (TP/SL/expiry/edge-evaporated)
 - External signals from satellite sources injected via `assess_batch(external_signals=...)` — generic dict pattern, no per-source modifications to assess_batch needed
 - Manifold integration disabled by default (`intelligence.manifold.enabled: false`) — enable in config.yaml
+- `Market.time_horizon` is a computed field (SHORT/MEDIUM/LONG) based on `end_date`
+- Risk checks accept optional `time_horizon` for per-horizon pool enforcement; `None` skips pool check (backward compat)
+- Near-resolution positions (`mark_near_resolution()`) count at 50% for exposure calculations
+- Tick cycle sorts signals by priority score (`edge / days_to_resolution`) before execution
 
 ## VAE Signals (9, weights sum to 1.0)
 | Signal | Weight | Source |
@@ -92,3 +96,6 @@
 - Max single position: 5% of equity
 - Circuit breaker: 3 consecutive losses OR 15% drawdown
 - Max concurrent positions: 25
+- Horizon budget pools: 60% short / 30% medium / 10% long (of max_exposure)
+- Min edge per horizon: 3% short / 5% medium / 10% long
+- Near-resolution discount: 50% (positions < 24h + prob > 0.90)

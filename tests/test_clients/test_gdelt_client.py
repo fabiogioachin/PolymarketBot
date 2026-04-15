@@ -18,6 +18,19 @@ def client() -> GdeltClient:
     return c
 
 
+# ── Default configuration ─────────────────────────────────────────────
+
+
+class TestDefaults:
+    def test_default_max_retries(self) -> None:
+        c = GdeltClient()
+        assert c._max_retries == 1
+
+    def test_default_backoff(self) -> None:
+        c = GdeltClient()
+        assert c._backoff == 5.0
+
+
 # ── Article search ────────────────────────────────────────────────────
 
 
