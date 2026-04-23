@@ -54,6 +54,15 @@ valuation:
     min_edge_super_long: 0.15  # super_long: 15% (very high bar, >30 days)
     min_confidence: 0.3
     strong_edge: 0.15
+  volatility:
+    window_minutes: 60            # trailing window for realized_volatility
+    velocity_window_minutes: 30   # trailing window for price_velocity
+    k_short: 0.5                  # CI multiplier per horizon
+    k_medium: 0.75
+    k_long: 1.0
+    velocity_alpha: 0.5           # scales velocity_against into penalty
+    strong_edge_threshold: 0.10   # |edge_central| above this bypasses velocity penalty
+    min_observations: 3           # min price points to compute vol
 
 intelligence:
   gdelt:

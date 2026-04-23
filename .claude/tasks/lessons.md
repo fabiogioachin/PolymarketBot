@@ -1,17 +1,23 @@
 ## Active
 Lessons that affect future tasks. Target: under 15 entries.
 
-### 2026-04-04 — [codebase] Python 3.11 not 3.12
-**Context**: `pip install -e ".[dev]"` during Session 1.1 scaffold
-**What happened**: pyproject.toml had `requires-python = ">=3.12"` but system has Python 3.11.9. Also `target-version = "py312"` in ruff config.
-**Root cause**: todo.md spec assumed Python 3.12+, but dev machine only has 3.11.
-**Action**: Always check `python --version` before setting requires-python. Current project uses `>=3.11` and `target-version = "py311"`.
+### 2026-04-23 — [codebase] Static edge ignora volatility regime
+**Context**: Phase 13 kickoff — utente evidenzia "IL TIMING è IL PIù GRANDE EDGE"
+**What happened**: `fee_adjusted_edge` scalare non distingue 3% su vol 0.3% (alpha) da 3% su vol 5% (rumore). Gating omogeneo → trade rumorosi.
+**Root cause**: nessun penalty di volatilità realizzata / velocity sul prezzo; nessun CI bounds.
+**Action**: Phase 13 S1 introduce `edge_dynamic` (CI con `k_per_horizon` + sign-preserving velocity penalty + edge-strength dampener). `valuation.volatility` block con `strong_edge_threshold=0.10` per bypass penalty su edge forti (allucinazioni collettive).
 
-### 2026-04-04 — [tool] hatchling editable install broken on this pip
-**Context**: `pip install -e ".[dev]"` failed with `AttributeError: module 'hatchling.build' has no attribute 'prepare_metadata_for_build_editable'`
-**What happened**: Even after upgrading pip+hatchling, editable install still failed. Workaround: install deps directly with `pip install`.
-**Root cause**: pip/hatchling version incompatibility on Windows Python 3.11 from Microsoft Store.
-**Action**: For this project, use `pip install <deps>` directly instead of `pip install -e ".[dev]"`. Consider switching to uv or a venv with standard Python installer in future.
+### 2026-04-23 — [codebase] Polymarket platform data free-tier non integrato
+**Context**: Audit pre-Phase 13 — bot cieco su trade tape, volume ranking e leaderboard
+**What happened**: Letto solo orderbook e price-history. Non sa chi muove size, né quali sono i mercati gettonati.
+**Root cause**: Client e orchestrator non implementati.
+**Action**: Phase 13 S2+S3 aggiungono `PolymarketTradesClient`, `PolymarketLeaderboardClient`, `PopularMarketsOrchestrator`, `WhaleOrchestrator` + subgraph on-chain.
+
+### 2026-04-23 — [codebase] CORS verdict Polymarket — clob aperto, gamma chiuso
+**Context**: Valutazione DSS live-artifact standalone
+**What happened**: `clob.polymarket.com/*` risponde con CORS aperto (fetch browser-side OK). `gamma-api` no.
+**Root cause**: configurazione server-side lato piattaforma.
+**Action**: DSS Live Artifact (Phase 13 S5a) fetcha diretto solo da clob + The Graph subgraph gateway; per Gamma popular-markets si polla `intelligence_snapshot.json` scritto dal backend (S4a).
 
 ### 2026-04-05 — [codebase] Signal must carry market_price, not just edge
 **Context**: Full project review — execution engine used `signal.edge_amount` as order price
@@ -57,20 +63,6 @@ Lessons that affect future tasks. Target: under 15 entries.
 **Root cause**: The 0.01 floor was meant to prevent negative prices but created artificial arbitrage for sub-penny tokens. No liquidity/spread simulation.
 **Action**: Removed artificial floor (`max(0.0001, ...)`). Added `_estimate_spread()` (hyperbolically wider at extreme prices) and `_estimate_depth()` (max 100 shares at <0.01). Sub-penny tokens now have 50-100% spread and capped depth.
 
-### 2026-04-15 — [workflow] Browser test against live server validates runtime, not code
-
-**Context**: `PG_browser_test_session.md` eseguito contro server avviato PRIMA delle fix Phase 11-12
-**What happened**: Intelligence/Knowledge tabs senza fetch API, `knowledge/debug` 404, `intelligence/news` 404 — tutti "fix già applicati nel codice" (Phase 11 Step 4, Phase 12 Step 1). Ma il server (tick_count=1452 all'avvio) era un'istanza precedente alle modifiche.
-**Root cause**: I test unit (714 pass) verificano correttezza del codice, non il runtime. Un server avviato prima del merge dei fix continua a servire il codice vecchio finché non viene riavviato.
-**Action**: In Docker: rebuild immagini (`docker compose build`) + restart container. Verificare che `knowledge/debug` risponda 200 e che Intelligence tab faccia chiamate API prima di segnare la browser validation come conclusa.
-
-### 2026-04-15 — [workflow] Browser caches Docker static assets across rebuilds
-
-**Context**: Rebuild Docker frontend dopo Phase 11-12 — browser continuava a caricare vecchio app.js (19156 byte invece di 27784)
-**What happened**: `performance.getEntriesByType('resource')` mostrava `transferSize=0` per app.js — browser usava disk cache. `typeof loadIntelligence === 'undefined'` nonostante rebuild corretto. Nginx non impostava `Cache-Control` headers per `/static/`.
-**Root cause**: Nginx default serving non invia `no-cache` headers. Browser cacheava app.js senza scadenza. URL del file (`/static/js/app.js`) invariato → browser non sapeva che il file era cambiato.
-**Action**: (1) Aggiungere `Cache-Control: no-store` in nginx.conf per `/static/`. (2) Usare versioning nell'URL (`?v=N`) in index.html per script e CSS. Incrementare `N` ad ogni rebuild che modifica file statici.
-
 ### 2026-04-15 — [codebase] SQLite schema mismatch: dict key vs column name
 
 **Context**: Bug 2 fix — `time_horizon` null in trade log
@@ -93,6 +85,24 @@ Lessons that affect future tasks. Target: under 15 entries.
 
 ## Archive
 Resolved or one-off entries. Not read by agents.
+
+### 2026-04-04 — [codebase] Python 3.11 not 3.12
+**Context**: `pip install -e ".[dev]"` during Session 1.1 scaffold
+**What happened**: pyproject.toml had `requires-python = ">=3.12"` but system has Python 3.11.9. Also `target-version = "py312"` in ruff config.
+**Root cause**: todo.md spec assumed Python 3.12+, but dev machine only has 3.11.
+**Action**: Always check `python --version` before setting requires-python. Current project uses `>=3.11` and `target-version = "py311"`.
+
+### 2026-04-04 — [tool] hatchling editable install broken on this pip
+**Context**: `pip install -e ".[dev]"` failed with `AttributeError: module 'hatchling.build' has no attribute 'prepare_metadata_for_build_editable'`
+**What happened**: Even after upgrading pip+hatchling, editable install still failed. Workaround: install deps directly with `pip install`.
+**Root cause**: pip/hatchling version incompatibility on Windows Python 3.11 from Microsoft Store.
+**Action**: For this project, use `pip install <deps>` directly instead of `pip install -e ".[dev]"`. Consider switching to uv or a venv with standard Python installer in future.
+
+### 2026-04-15 — [workflow] Browser test against live server validates runtime, not code
+Archived 2026-04-23 — post Phase 13 kickoff; runtime verification policy baked in.
+
+### 2026-04-15 — [workflow] Browser caches Docker static assets across rebuilds
+Archived 2026-04-23 — nginx `Cache-Control: no-store` + `?v=N` versioning permanently adopted.
 
 ### 2026-04-06 — [codebase] Duplicate enum: TimeHorizon in two model files
 **Context**: Phase 10 added `TimeHorizon` enum to `models/market.py`

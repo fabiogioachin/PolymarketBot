@@ -2,9 +2,36 @@
 
 > Autonomous intelligence + value assessment system for Polymarket
 > Stack: Python 3.11, FastAPI, Pydantic v2, httpx, aiosqlite, scikit-learn
-> Capital: 150 EUR | 687 tests | 9 VAE signals | 7 strategies | 9 project skills
+> Capital: 150 EUR | 11 VAE signals (post-S4b) | 7 strategies | 9 project skills
 
-## Phase 11: Critical Bug Fixes — Trading + Dashboard (6 fixes)
+## Phase 13 — Dynamic Edge & Platform Intelligence
+
+> Volatility-aware edge + Polymarket platform collectors (trades/popular/leaderboard) + on-chain subgraph + whale/insider VAE signals + standalone DSS artifact.
+> Master decisions: [.claude/plans/phase-13/00-decisions.md](.claude/plans/phase-13/00-decisions.md)
+
+### Wave schedule
+
+| Wave | Sessioni | Status |
+|------|----------|--------|
+| W1 | S1 Dynamic edge | [ ] |
+| W2 | S2 Collectors (trades, popular, leaderboard) | [ ] |
+| W3 | S3 Subgraph client | [ ] |
+| W4 | S4a Snapshot writer + Docker profiles // S4b Whale/insider VAE | [ ] / [ ] |
+| W5 | S5a DSS artifact // S5b Dashboard widgets | [ ] / [ ] |
+
+### Session plans
+
+- [ ] [S1 Dynamic edge](.claude/plans/phase-13/S1-dynamic-edge.md)
+- [ ] [S2 Collectors](.claude/plans/phase-13/S2-collectors.md)
+- [ ] [S3 Subgraph client](.claude/plans/phase-13/S3-subgraph.md)
+- [ ] [S4a Snapshot writer](.claude/plans/phase-13/S4a-snapshot-writer.md)
+- [ ] [S4b Whale/insider VAE](.claude/plans/phase-13/S4b-whale-insider-vae.md)
+- [ ] [S5a DSS artifact](.claude/plans/phase-13/S5a-dss-artifact.md)
+- [ ] [S5b Dashboard widgets](.claude/plans/phase-13/S5b-dashboard-widgets.md)
+
+---
+
+## Phase 11: Critical Bug Fixes — Trading + Dashboard (6 fixes) [DONE 2026-04-15]
 
 > Fix 6 diagnosed issues preventing the bot from placing new trades and populating Intelligence/Knowledge dashboard tabs.
 

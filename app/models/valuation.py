@@ -37,6 +37,8 @@ class ValuationInput(BaseModel):
     pattern_kg_signal: float | None = None
     cross_platform_signal: float | None = None  # Manifold probability as fair value
     temporal_factor: float | None = None
+    whale_pressure_signal: float | None = None  # S4b
+    insider_pressure_signal: float | None = None  # S4b
 
 
 class ValuationResult(BaseModel):
@@ -48,6 +50,11 @@ class ValuationResult(BaseModel):
     edge: float = 0.0  # fair_value - market_price (signed)
     confidence: float = 0.0  # 0.0-1.0
     fee_adjusted_edge: float = 0.0
+    edge_lower: float | None = None
+    edge_upper: float | None = None
+    edge_dynamic: float | None = None
+    realized_volatility: float | None = None
+    price_velocity: float | None = None
     recommendation: Recommendation = Recommendation.HOLD
     edge_sources: list[EdgeSource] = Field(default_factory=list)
     timestamp: datetime | None = None

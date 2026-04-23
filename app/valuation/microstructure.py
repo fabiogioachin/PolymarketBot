@@ -1,5 +1,7 @@
 """Market microstructure analyzer: orderbook, volume, and market dynamics analysis."""
 
+import math
+import statistics
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -154,6 +156,56 @@ class MicrostructureAnalyzer:
         if closest.price == 0:
             return 0.0
         return (current - closest.price) / closest.price
+
+    @staticmethod
+    def realized_volatility(points: list[PricePoint], window_minutes: int = 60) -> float:
+        """Realized volatility (non-annualized) from log-returns inside the window.
+
+        Filters points within `window_minutes` before the latest timestamp,
+        computes consecutive log-returns, and returns `statistics.stdev` if at
+        least 3 points are available (i.e., ≥2 returns). Prices ≤ 0 are skipped.
+        """
+        if not points or len(points) < 3:
+            return 0.0
+
+        ordered = sorted(points, key=lambda p: p.timestamp)
+        cutoff = ordered[-1].timestamp - timedelta(minutes=window_minutes)
+        window_points = [p for p in ordered if p.timestamp >= cutoff]
+        if len(window_points) < 3:
+            return 0.0
+
+        log_returns: list[float] = []
+        prev_price = window_points[0].price
+        for point in window_points[1:]:
+            if prev_price <= 0 or point.price <= 0:
+                prev_price = point.price
+                continue
+            log_returns.append(math.log(point.price / prev_price))
+            prev_price = point.price
+
+        if len(log_returns) < 2:
+            return 0.0
+        return statistics.stdev(log_returns)
+
+    @staticmethod
+    def price_velocity(points: list[PricePoint], window_minutes: int = 30) -> float:
+        """Signed price change per minute across the trailing window.
+
+        Returns (p_last - p_first) / window_minutes for points within the
+        window. Requires ≥2 points in-window, else 0.0.
+        """
+        if not points or len(points) < 2:
+            return 0.0
+
+        ordered = sorted(points, key=lambda p: p.timestamp)
+        cutoff = ordered[-1].timestamp - timedelta(minutes=window_minutes)
+        window_points = [p for p in ordered if p.timestamp >= cutoff]
+        if len(window_points) < 2:
+            return 0.0
+
+        first = window_points[0].price
+        last = window_points[-1].price
+        return (last - first) / float(window_minutes)
 
     @staticmethod
     def _compute_volume_anomaly(points: list[PricePoint], baseline_days: int) -> float:

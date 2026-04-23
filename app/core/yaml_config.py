@@ -93,10 +93,24 @@ class ThresholdsConfig(BaseModel):
     strong_edge: float = 0.15
 
 
+class VolatilityConfig(BaseModel):
+    """Volatility-aware edge parameters (Phase 13 S1)."""
+
+    window_minutes: int = 60
+    velocity_window_minutes: int = 30
+    k_short: float = 0.5
+    k_medium: float = 0.75
+    k_long: float = 1.0
+    velocity_alpha: float = 0.5
+    strong_edge_threshold: float = 0.10
+    min_observations: int = 3
+
+
 class ValuationConfig(BaseModel):
     tick_interval_seconds: int = 120
     weights: WeightsConfig = Field(default_factory=WeightsConfig)
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)
+    volatility: VolatilityConfig = Field(default_factory=VolatilityConfig)
 
 
 class GdeltConfig(BaseModel):

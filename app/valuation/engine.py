@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -37,6 +38,7 @@ class ValueAssessmentEngine:
         self._temporal = TemporalAnalyzer()
         self._weights = app_config.valuation.weights
         self._thresholds = app_config.valuation.thresholds
+        self._volatility = app_config.valuation.volatility
 
     async def assess(
         self,
@@ -99,14 +101,52 @@ class ValueAssessmentEngine:
         # Compute fair value
         fair_value, edge_sources, confidence = self._compute_fair_value(inputs)
 
-        # Apply temporal scaling to edge
+        # 1. edge_central — static baseline (kept as fee_adjusted_edge for backward compat)
         edge = fair_value - market_price
-        scaled_edge = edge * temporal_factor
-        fee_adjusted_edge = scaled_edge - market.fee_rate
+        edge_central = edge * temporal_factor - market.fee_rate
+        fee_adjusted_edge = edge_central  # backward compat alias
 
-        # Recommendation (use per-horizon edge threshold)
+        # 2. Volatility + velocity from price_history (0.0 if unavailable)
+        realized_vol = 0.0
+        velocity_val = 0.0
+        if price_history is not None and price_history.points:
+            realized_vol = MicrostructureAnalyzer.realized_volatility(
+                price_history.points, window_minutes=self._volatility.window_minutes
+            )
+            velocity_val = MicrostructureAnalyzer.price_velocity(
+                price_history.points,
+                window_minutes=self._volatility.velocity_window_minutes,
+            )
+
+        # 3. CI bounds per-horizon
+        k = self._resolve_k(market.time_horizon)
+        edge_lower = edge_central - k * realized_vol
+        edge_upper = edge_central + k * realized_vol
+
+        # 4. Sign-preserving velocity penalty
+        velocity_against = -velocity_val if edge_central > 0 else velocity_val
+        velocity_penalty_raw = max(
+            0.3, 1.0 - self._volatility.velocity_alpha * abs(velocity_against)
+        )
+
+        # 5. Edge-strength dampener: strong edges bypass velocity penalty
+        threshold = self._volatility.strong_edge_threshold
+        edge_strength = min(1.0, abs(edge_central) / threshold) if threshold > 0 else 1.0
+        penalty_dampener = 1.0 - edge_strength
+        velocity_penalty_effective = 1.0 - penalty_dampener * (1.0 - velocity_penalty_raw)
+
+        # 6. Sign-preserving dynamic edge, gated at 0 when vol dominates
+        edge_magnitude = max(0.0, abs(edge_central) - k * realized_vol)
+        if edge_magnitude == 0.0:
+            edge_dynamic = 0.0
+        else:
+            edge_dynamic = (
+                math.copysign(edge_magnitude, edge_central) * velocity_penalty_effective
+            )
+
+        # 7. Recommendation on edge_dynamic (per-horizon threshold)
         recommendation = self._recommend(
-            fee_adjusted_edge, confidence, time_horizon=market.time_horizon
+            edge_dynamic, confidence, time_horizon=market.time_horizon
         )
 
         result = ValuationResult(
@@ -116,6 +156,11 @@ class ValueAssessmentEngine:
             edge=round(edge, 4),
             confidence=round(confidence, 4),
             fee_adjusted_edge=round(fee_adjusted_edge, 4),
+            edge_lower=round(edge_lower, 4),
+            edge_upper=round(edge_upper, 4),
+            edge_dynamic=round(edge_dynamic, 4),
+            realized_volatility=round(realized_vol, 6),
+            price_velocity=round(velocity_val, 6),
             recommendation=recommendation,
             edge_sources=edge_sources,
             timestamp=datetime.now(tz=UTC),
@@ -129,11 +174,24 @@ class ValueAssessmentEngine:
             market_price=market_price,
             edge=result.edge,
             fee_adjusted_edge=result.fee_adjusted_edge,
+            edge_dynamic=result.edge_dynamic,
+            realized_volatility=result.realized_volatility,
+            price_velocity=result.price_velocity,
             confidence=result.confidence,
             recommendation=result.recommendation,
         )
 
         return result
+
+    def _resolve_k(self, time_horizon: TimeHorizon | None) -> float:
+        """Resolve CI multiplier per time horizon."""
+        if time_horizon == TimeHorizon.SHORT:
+            return self._volatility.k_short
+        if time_horizon == TimeHorizon.MEDIUM:
+            return self._volatility.k_medium
+        if time_horizon in (TimeHorizon.LONG, TimeHorizon.SUPER_LONG):
+            return self._volatility.k_long
+        return self._volatility.k_long
 
     async def assess_batch(
         self,
