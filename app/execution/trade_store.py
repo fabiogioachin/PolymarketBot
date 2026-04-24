@@ -323,6 +323,57 @@ class TradeStore:
         )
         await conn.commit()
 
+    async def update_whale_trade_enrichment(
+        self,
+        wallet_address: str,
+        total_pnl: float | None,
+        weekly_pnl: float | None,
+        volume_rank: int | None,
+    ) -> int:
+        """Propagate subgraph wallet aggregates to every `whale_trades` row.
+
+        Updates ALL rows whose `wallet_address` matches so a single enrichment
+        call back-fills historical trades too.  Returns the number of rows
+        touched (useful for logging / tests).
+        """
+        if not wallet_address:
+            return 0
+        conn = self._ensure()
+        cursor = await conn.execute(
+            """UPDATE whale_trades
+               SET wallet_total_pnl = ?,
+                   wallet_weekly_pnl = ?,
+                   wallet_volume_rank = ?
+               WHERE wallet_address = ?""",
+            (total_pnl, weekly_pnl, volume_rank, wallet_address),
+        )
+        await conn.commit()
+        return int(cursor.rowcount or 0)
+
+    async def load_whale_enrichment(
+        self, wallet_address: str
+    ) -> dict[str, object] | None:
+        """Return the current enrichment tuple for a wallet (latest row)."""
+        if not wallet_address:
+            return None
+        conn = self._ensure()
+        cursor = await conn.execute(
+            """SELECT wallet_total_pnl, wallet_weekly_pnl, wallet_volume_rank
+               FROM whale_trades
+               WHERE wallet_address = ?
+               ORDER BY timestamp DESC
+               LIMIT 1""",
+            (wallet_address,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "wallet_total_pnl": row["wallet_total_pnl"],
+            "wallet_weekly_pnl": row["wallet_weekly_pnl"],
+            "wallet_volume_rank": row["wallet_volume_rank"],
+        }
+
     async def load_whale_trades(
         self, market_id: str, since_ts: float
     ) -> list[dict[str, object]]:

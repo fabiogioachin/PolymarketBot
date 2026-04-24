@@ -17,6 +17,7 @@ from app.core.yaml_config import app_config
 from app.models.intelligence import WhaleTrade
 
 if TYPE_CHECKING:
+    from app.clients.polymarket_subgraph import PolymarketSubgraphClient
     from app.models.market import Market
 
 logger = get_logger(__name__)
@@ -77,10 +78,12 @@ class WhaleOrchestrator:
         trades_client: PolymarketTradesClient | None = None,
         market_service: Any = None,
         trade_store: Any = None,
+        subgraph_client: PolymarketSubgraphClient | None = None,
     ) -> None:
         self._trades_client = trades_client or PolymarketTradesClient()
         self._market_service = market_service
         self._trade_store = trade_store
+        self._subgraph_client = subgraph_client
         self._last_tick: datetime | None = None
         self._recent_trades: list[WhaleTrade] = []
 
@@ -91,6 +94,12 @@ class WhaleOrchestrator:
     async def set_trade_store(self, store: Any) -> None:
         """Wire the TradeStore late (after `init()` in DI). No history load."""
         self._trade_store = store
+
+    def set_subgraph_client(
+        self, client: PolymarketSubgraphClient | None
+    ) -> None:
+        """Wire (or unwire) the subgraph enrichment client."""
+        self._subgraph_client = client
 
     async def tick(self, markets: list[Market]) -> list[WhaleTrade]:
         """Fetch recent trades per market, filter whales, persist, return them."""
@@ -133,6 +142,13 @@ class WhaleOrchestrator:
         if len(self._recent_trades) > 500:
             self._recent_trades = self._recent_trades[-500:]
 
+        # Phase 13 S3: enrich wallet aggregates via subgraph (best-effort).
+        if detected and self._subgraph_client is not None:
+            try:
+                await self._enrich_wallets(detected)
+            except Exception as exc:  # defensive: must not break tick
+                logger.warning("whale_enrichment_failed", error=str(exc))
+
         self._last_tick = now
         logger.info(
             "whale_tick",
@@ -141,6 +157,45 @@ class WhaleOrchestrator:
             threshold_usd=threshold,
         )
         return detected
+
+    async def _enrich_wallets(self, trades: list[WhaleTrade]) -> None:
+        """Fetch + persist wallet aggregates for every distinct wallet.
+
+        Runs AFTER the whale trades are saved so the UPDATE statement can
+        back-fill every row belonging to the wallet.  Subgraph errors must
+        never propagate: each wallet is tried in isolation and logged on
+        failure.
+        """
+        if self._subgraph_client is None:
+            return
+        wallets = {t.wallet_address for t in trades if t.wallet_address}
+        for wallet in wallets:
+            try:
+                enrichment = await self._subgraph_client.get_wallet_enrichment(
+                    wallet
+                )
+            except Exception as exc:
+                logger.warning(
+                    "whale_wallet_enrichment_failed",
+                    wallet=wallet,
+                    error=str(exc),
+                )
+                continue
+            if self._trade_store is None:
+                continue
+            try:
+                await self._trade_store.update_whale_trade_enrichment(
+                    wallet,
+                    enrichment.get("total_pnl"),
+                    enrichment.get("weekly_pnl"),
+                    enrichment.get("volume_rank"),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "whale_enrichment_persist_failed",
+                    wallet=wallet,
+                    error=str(exc),
+                )
 
     def _parse_trade(
         self,

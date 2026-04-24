@@ -185,6 +185,19 @@ class LeaderboardConfig(BaseModel):
     tick_interval_minutes: int = 60
 
 
+class SubgraphConfig(BaseModel):
+    """Phase 13 S3: The Graph subgraph client for wallet enrichment."""
+
+    enabled: bool = True
+    endpoint: str = (
+        "https://gateway.thegraph.com/api/subgraphs/id/"
+        "81Dm16JjuFSrqz813HysXoUPvzTwE7fsfPk2RTf66nyC"
+    )
+    api_key_env: str = "THEGRAPH_API_KEY"
+    rate_limit_per_minute: int = 100
+    enrichment_ttl_hours: int = 1
+
+
 class IntelligenceConfig(BaseModel):
     gdelt: GdeltConfig = Field(default_factory=GdeltConfig)
     rss: RssConfig = Field(default_factory=RssConfig)
@@ -195,6 +208,7 @@ class IntelligenceConfig(BaseModel):
         default_factory=PopularMarketsConfig
     )
     leaderboard: LeaderboardConfig = Field(default_factory=LeaderboardConfig)
+    subgraph: SubgraphConfig = Field(default_factory=SubgraphConfig)
 
 
 class AlertRule(BaseModel):

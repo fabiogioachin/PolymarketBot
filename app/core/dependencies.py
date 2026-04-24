@@ -8,6 +8,7 @@ from app.core.logging import get_logger
 from app.core.yaml_config import app_config
 
 if TYPE_CHECKING:
+    from app.clients.polymarket_subgraph import PolymarketSubgraphClient
     from app.execution.engine import ExecutionEngine
     from app.knowledge.risk_kb import RiskKnowledgeBase
     from app.risk.circuit_breaker import CircuitBreaker
@@ -39,6 +40,7 @@ _manifold_service: ManifoldService | None = None
 _intelligence_orchestrator: IntelligenceOrchestrator | None = None
 _whale_orchestrator: WhaleOrchestrator | None = None
 _popular_markets_orchestrator: PopularMarketsOrchestrator | None = None
+_subgraph_client: PolymarketSubgraphClient | None = None
 
 
 # ── Lazy accessors ───────────────────────────────────────────────────
@@ -78,6 +80,33 @@ def get_intelligence_orchestrator() -> IntelligenceOrchestrator:
     return _intelligence_orchestrator
 
 
+def get_subgraph_client() -> PolymarketSubgraphClient | None:
+    """Get the Polymarket subgraph client singleton, or None if disabled."""
+    global _subgraph_client  # noqa: PLW0603
+    sub_cfg = app_config.intelligence.subgraph
+    if not sub_cfg.enabled:
+        return None
+    if _subgraph_client is None:
+        import os
+
+        from app.clients.polymarket_subgraph import PolymarketSubgraphClient
+
+        api_key = os.getenv(sub_cfg.api_key_env) or None
+        ttl_seconds = max(0.0, float(sub_cfg.enrichment_ttl_hours) * 3600.0)
+        _subgraph_client = PolymarketSubgraphClient(
+            endpoint=sub_cfg.endpoint,
+            api_key=api_key,
+            rate_limit_per_minute=sub_cfg.rate_limit_per_minute,
+            cache_ttl_seconds=ttl_seconds,
+        )
+        logger.info(
+            "subgraph_client_initialized",
+            endpoint=sub_cfg.endpoint,
+            has_api_key=bool(api_key),
+        )
+    return _subgraph_client
+
+
 def get_whale_orchestrator() -> WhaleOrchestrator:
     """Get WhaleOrchestrator singleton (Polymarket /trades poller)."""
     global _whale_orchestrator  # noqa: PLW0603
@@ -85,6 +114,9 @@ def get_whale_orchestrator() -> WhaleOrchestrator:
         from app.services.whale_orchestrator import WhaleOrchestrator
 
         _whale_orchestrator = WhaleOrchestrator()
+        subgraph = get_subgraph_client()
+        if subgraph is not None:
+            _whale_orchestrator.set_subgraph_client(subgraph)
         logger.info("whale_orchestrator_initialized")
     return _whale_orchestrator
 

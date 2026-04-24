@@ -120,6 +120,12 @@ intelligence:
   leaderboard:
     enabled: true
     tick_interval_minutes: 60
+  subgraph:
+    enabled: true
+    endpoint: "https://gateway.thegraph.com/api/subgraphs/id/81Dm16JjuFSrqz813HysXoUPvzTwE7fsfPk2RTf66nyC"
+    api_key_env: "THEGRAPH_API_KEY"
+    rate_limit_per_minute: 100
+    enrichment_ttl_hours: 1
 
 strategies:
   enabled:
