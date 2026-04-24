@@ -73,3 +73,45 @@ class AnomalyReport(BaseModel):
     events: list[GdeltEvent] = Field(default_factory=list)
     news_items: list[NewsItem] = Field(default_factory=list)
     total_anomalies: int = 0
+
+
+# ── Phase 13 S2: Platform data collectors ──────────────────────────────
+
+
+class WhaleTrade(BaseModel):
+    """A large trade detected on Polymarket (size >= whale threshold)."""
+
+    id: str
+    timestamp: datetime
+    market_id: str
+    wallet_address: str
+    side: str  # "BUY" | "SELL"
+    size_usd: float
+    price: float
+    is_pre_resolution: bool = False
+    raw_json: str = ""
+    # Populated by S3 (wallet enrichment from subgraph); None until then.
+    wallet_total_pnl: float | None = None
+    wallet_weekly_pnl: float | None = None
+    wallet_volume_rank: int | None = None
+
+
+class PopularMarket(BaseModel):
+    """A market snapshot ranked by 24h volume."""
+
+    market_id: str
+    question: str = ""
+    volume24h: float = 0.0
+    liquidity: float | None = None
+    snapshot_time: datetime
+
+
+class LeaderboardEntry(BaseModel):
+    """A single leaderboard row: top trader by PnL for a timeframe."""
+
+    rank: int
+    wallet_address: str
+    pnl_usd: float
+    win_rate: float | None = None
+    timeframe: str
+    snapshot_time: datetime

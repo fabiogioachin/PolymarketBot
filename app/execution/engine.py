@@ -70,6 +70,8 @@ class ExecutionEngine:
         intelligence_orchestrator: Any = None,
         knowledge_service: Any = None,
         risk_kb: Any = None,
+        whale_orchestrator: Any = None,
+        popular_markets_orchestrator: Any = None,
     ) -> None:
         self._executor = executor
         self._risk = risk_manager
@@ -82,6 +84,8 @@ class ExecutionEngine:
         self._intelligence = intelligence_orchestrator
         self._knowledge_service = knowledge_service
         self._risk_kb = risk_kb
+        self._whale_orchestrator = whale_orchestrator
+        self._popular_markets_orchestrator = popular_markets_orchestrator
         self._running = False
         self._tick_count = 0
         self._last_tick: datetime | None = None
@@ -90,6 +94,8 @@ class ExecutionEngine:
         self._token_to_market: dict[str, str] = {}
         self._last_manifold_refresh: datetime | None = None
         self._last_intel_refresh: datetime | None = None
+        self._last_whale_refresh: datetime | None = None
+        self._last_popular_refresh: datetime | None = None
         # WebSocket orderbook cache (background task)
         self._ws_client = PolymarketWsClient()
         self._orderbook_cache: dict[str, OrderBook] = {}
@@ -135,6 +141,14 @@ class ExecutionEngine:
         external_signals: dict[str, dict[str, Any]] = {}
         if self._intelligence is not None:
             await self._fetch_intelligence_signals(markets, external_signals, now)
+
+        # 2b-bis. Fetch whale trades (Phase 13 S2)
+        if self._whale_orchestrator is not None:
+            await self._fetch_whale_signals(markets, now)
+
+        # 2b-ter. Snapshot popular markets (Phase 13 S2)
+        if self._popular_markets_orchestrator is not None:
+            await self._fetch_popular_markets(now)
 
         # 2c. Fetch KG pattern signals from Obsidian vault
         await self._fetch_kg_signals(markets, external_signals)
@@ -514,6 +528,50 @@ class ExecutionEngine:
             )
         except Exception as exc:
             logger.warning("intelligence_fetch_failed", error=str(exc))
+
+    async def _fetch_whale_signals(
+        self,
+        markets: list[Market],
+        now: datetime,
+    ) -> None:
+        """Poll Polymarket /trades for whale activity on a slow cadence."""
+        from app.core.yaml_config import app_config
+
+        interval = app_config.intelligence.whale.tick_interval_seconds
+        if (
+            self._last_whale_refresh is not None
+            and (now - self._last_whale_refresh).total_seconds() < interval
+        ):
+            return
+
+        try:
+            whales = await self._whale_orchestrator.tick(markets)
+            self._last_whale_refresh = now
+            if whales:
+                logger.info("whale_signals_fetched", count=len(whales))
+        except Exception as exc:
+            logger.warning("whale_fetch_failed", error=str(exc))
+
+    async def _fetch_popular_markets(self, now: datetime) -> None:
+        """Snapshot top-N markets by 24h volume on a slow cadence."""
+        from app.core.yaml_config import app_config
+
+        interval = (
+            app_config.intelligence.popular_markets.tick_interval_minutes * 60
+        )
+        if (
+            self._last_popular_refresh is not None
+            and (now - self._last_popular_refresh).total_seconds() < interval
+        ):
+            return
+
+        try:
+            snapshot = await self._popular_markets_orchestrator.tick()
+            self._last_popular_refresh = now
+            if snapshot:
+                logger.info("popular_markets_snapshot", count=len(snapshot))
+        except Exception as exc:
+            logger.warning("popular_markets_fetch_failed", error=str(exc))
 
     async def _fetch_manifold_signals(
         self, markets: list[Market], now: datetime

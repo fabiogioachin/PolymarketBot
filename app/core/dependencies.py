@@ -16,6 +16,10 @@ if TYPE_CHECKING:
     from app.services.intelligence_orchestrator import IntelligenceOrchestrator
     from app.services.manifold_service import ManifoldService
     from app.services.market_service import MarketService
+    from app.services.popular_markets_orchestrator import (
+        PopularMarketsOrchestrator,
+    )
+    from app.services.whale_orchestrator import WhaleOrchestrator
     from app.strategies.registry import StrategyRegistry
     from app.valuation.engine import ValueAssessmentEngine
 
@@ -33,6 +37,8 @@ _execution_engine: ExecutionEngine | None = None
 _bot_service: BotService | None = None
 _manifold_service: ManifoldService | None = None
 _intelligence_orchestrator: IntelligenceOrchestrator | None = None
+_whale_orchestrator: WhaleOrchestrator | None = None
+_popular_markets_orchestrator: PopularMarketsOrchestrator | None = None
 
 
 # ── Lazy accessors ───────────────────────────────────────────────────
@@ -70,6 +76,30 @@ def get_intelligence_orchestrator() -> IntelligenceOrchestrator:
         _intelligence_orchestrator = IntelligenceOrchestrator()
         logger.info("intelligence_orchestrator_initialized")
     return _intelligence_orchestrator
+
+
+def get_whale_orchestrator() -> WhaleOrchestrator:
+    """Get WhaleOrchestrator singleton (Polymarket /trades poller)."""
+    global _whale_orchestrator  # noqa: PLW0603
+    if _whale_orchestrator is None:
+        from app.services.whale_orchestrator import WhaleOrchestrator
+
+        _whale_orchestrator = WhaleOrchestrator()
+        logger.info("whale_orchestrator_initialized")
+    return _whale_orchestrator
+
+
+def get_popular_markets_orchestrator() -> PopularMarketsOrchestrator:
+    """Get PopularMarketsOrchestrator singleton (top-N by volume24h)."""
+    global _popular_markets_orchestrator  # noqa: PLW0603
+    if _popular_markets_orchestrator is None:
+        from app.services.popular_markets_orchestrator import (
+            PopularMarketsOrchestrator,
+        )
+
+        _popular_markets_orchestrator = PopularMarketsOrchestrator()
+        logger.info("popular_markets_orchestrator_initialized")
+    return _popular_markets_orchestrator
 
 
 async def get_risk_kb() -> RiskKnowledgeBase:
@@ -183,6 +213,17 @@ async def get_execution_engine() -> ExecutionEngine:
         if intel_orch is not None:
             await intel_orch.set_trade_store(store)
 
+        # Phase 13 S2: whale + popular markets orchestrators
+        whale_orch = None
+        if app_config.intelligence.whale.enabled:
+            whale_orch = get_whale_orchestrator()
+            await whale_orch.set_trade_store(store)
+
+        pop_orch = None
+        if app_config.intelligence.popular_markets.enabled:
+            pop_orch = get_popular_markets_orchestrator()
+            await pop_orch.set_trade_store(store)
+
         # Knowledge service (Obsidian KG patterns): only if Obsidian is enabled
         knowledge_service = None
         if app_config.intelligence.obsidian.enabled:
@@ -204,6 +245,8 @@ async def get_execution_engine() -> ExecutionEngine:
             intelligence_orchestrator=intel_orch,
             knowledge_service=knowledge_service,
             risk_kb=risk_kb,
+            whale_orchestrator=whale_orch,
+            popular_markets_orchestrator=pop_orch,
         )
         await _execution_engine.restore_from_store()
     return _execution_engine

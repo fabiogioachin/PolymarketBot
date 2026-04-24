@@ -161,11 +161,40 @@ class ManifoldConfig(BaseModel):
     min_unique_bettors: int = 10
 
 
+class WhaleConfig(BaseModel):
+    """Phase 13 S2: whale trade detection thresholds & cadence."""
+
+    enabled: bool = True
+    threshold_usd: float = 100000.0
+    pre_resolution_window_minutes: int = 30
+    tick_interval_seconds: int = 60
+
+
+class PopularMarketsConfig(BaseModel):
+    """Phase 13 S2: popular markets snapshot cadence."""
+
+    enabled: bool = True
+    top_n: int = 20
+    tick_interval_minutes: int = 5
+
+
+class LeaderboardConfig(BaseModel):
+    """Phase 13 S2: trader leaderboard snapshot cadence."""
+
+    enabled: bool = True
+    tick_interval_minutes: int = 60
+
+
 class IntelligenceConfig(BaseModel):
     gdelt: GdeltConfig = Field(default_factory=GdeltConfig)
     rss: RssConfig = Field(default_factory=RssConfig)
     obsidian: ObsidianKgConfig = Field(default_factory=ObsidianKgConfig)
     manifold: ManifoldConfig = Field(default_factory=ManifoldConfig)
+    whale: WhaleConfig = Field(default_factory=WhaleConfig)
+    popular_markets: PopularMarketsConfig = Field(
+        default_factory=PopularMarketsConfig
+    )
+    leaderboard: LeaderboardConfig = Field(default_factory=LeaderboardConfig)
 
 
 class AlertRule(BaseModel):

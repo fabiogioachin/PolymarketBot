@@ -108,6 +108,18 @@ intelligence:
     match_confidence_threshold: 0.6
     min_manifold_volume: 1000.0
     min_unique_bettors: 10
+  whale:
+    enabled: true
+    threshold_usd: 100000          # single trade >= $100k flagged as whale
+    pre_resolution_window_minutes: 30
+    tick_interval_seconds: 60
+  popular_markets:
+    enabled: true
+    top_n: 20
+    tick_interval_minutes: 5
+  leaderboard:
+    enabled: true
+    tick_interval_minutes: 60
 
 strategies:
   enabled:
