@@ -13,21 +13,23 @@
 
 | Wave | Sessioni | Status |
 |------|----------|--------|
-| W1 | S1 Dynamic edge | [ ] |
-| W2 | S2 Collectors (trades, popular, leaderboard) | [ ] |
-| W3 | S3 Subgraph client | [ ] |
+| W1 | S1 Dynamic edge | [x] 2026-04-24 |
+| W2 | S2 Collectors (trades, popular, leaderboard) | [x] 2026-04-24 |
+| W3 | S3 Subgraph client | [x] 2026-04-24 |
 | W4 | S4a Snapshot writer + Docker profiles // S4b Whale/insider VAE | [ ] / [ ] |
 | W5 | S5a DSS artifact // S5b Dashboard widgets | [ ] / [ ] |
 
 ### Session plans
 
-- [ ] [S1 Dynamic edge](.claude/plans/phase-13/S1-dynamic-edge.md)
-- [ ] [S2 Collectors](.claude/plans/phase-13/S2-collectors.md)
-- [ ] [S3 Subgraph client](.claude/plans/phase-13/S3-subgraph.md)
+- [x] [S1 Dynamic edge](.claude/plans/phase-13/S1-dynamic-edge.md) — 10 new tests
+- [x] [S2 Collectors](.claude/plans/phase-13/S2-collectors.md) — 33 new tests
+- [x] [S3 Subgraph client](.claude/plans/phase-13/S3-subgraph.md) — 21 new tests
 - [ ] [S4a Snapshot writer](.claude/plans/phase-13/S4a-snapshot-writer.md)
 - [ ] [S4b Whale/insider VAE](.claude/plans/phase-13/S4b-whale-insider-vae.md)
 - [ ] [S5a DSS artifact](.claude/plans/phase-13/S5a-dss-artifact.md)
 - [ ] [S5b Dashboard widgets](.claude/plans/phase-13/S5b-dashboard-widgets.md)
+
+**Baseline post-W3:** 826 pass, 0 fail. (+65 vs. pre-Phase 13, inclusi fix isolation `test_debug_risk_kb_rows`.)
 
 ---
 

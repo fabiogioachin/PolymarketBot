@@ -8,6 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import app.core.dependencies as deps_module
+from app.core.dependencies import get_risk_kb
 from app.main import app
 from app.services.intelligence_orchestrator import IntelligenceOrchestrator
 
@@ -20,15 +21,24 @@ async def client() -> AsyncClient:
 
 
 @pytest.fixture(autouse=True)
-def _mock_risk_kb(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Provide a fake RiskKnowledgeBase to avoid real SQLite."""
+def _mock_risk_kb() -> None:
+    """Override get_risk_kb via FastAPI dependency_overrides.
+
+    Cannot monkeypatch `deps_module.get_risk_kb` because KBDep in
+    app.api.v1.knowledge captured the original reference at import time via
+    `Annotated[..., Depends(get_risk_kb)]`.
+    """
     mock_kb = AsyncMock()
     mock_kb.get_all = AsyncMock(return_value=[])
 
     async def _fake_get_risk_kb() -> AsyncMock:
         return mock_kb
 
-    monkeypatch.setattr(deps_module, "get_risk_kb", _fake_get_risk_kb)
+    app.dependency_overrides[get_risk_kb] = _fake_get_risk_kb
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_risk_kb, None)
 
 
 @pytest.fixture(autouse=True)

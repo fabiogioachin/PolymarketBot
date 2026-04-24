@@ -13,6 +13,12 @@ Lessons that affect future tasks. Target: under 15 entries.
 **Root cause**: Client e orchestrator non implementati.
 **Action**: Phase 13 S2+S3 aggiungono `PolymarketTradesClient`, `PolymarketLeaderboardClient`, `PopularMarketsOrchestrator`, `WhaleOrchestrator` + subgraph on-chain.
 
+### 2026-04-24 — [codebase] FastAPI `Depends()` cattura il riferimento a import-time — monkeypatch bypassato
+**Context**: Fix `tests/test_api/test_knowledge.py::test_debug_risk_kb_rows` fallito con `5 == 0`.
+**What happened**: Il test faceva `monkeypatch.setattr(deps_module, "get_risk_kb", fake)` ma l'endpoint usa `KBDep = Annotated[RiskKnowledgeBase, Depends(get_risk_kb)]` a livello modulo — FastAPI ha risolto il riferimento originale a import-time, quindi il patch era invisibile. Il `RiskKnowledgeBase()` reale apriva `data/risk_kb.db` con 5 righe.
+**Root cause**: `Depends(func)` memorizza l'oggetto funzione, non il nome; monkeypatching del modulo dopo l'import non lo intercetta.
+**Action**: Usare sempre `app.dependency_overrides[dep_func] = fake` (FastAPI-canonico) per override di dependency in test, e fare `pop()` nel teardown. Non affidarsi a `monkeypatch.setattr` per `Depends()`. Applicato in `tests/test_api/test_knowledge.py` fixture `_mock_risk_kb`.
+
 ### 2026-04-23 — [codebase] CORS verdict Polymarket — clob aperto, gamma chiuso
 **Context**: Valutazione DSS live-artifact standalone
 **What happened**: `clob.polymarket.com/*` risponde con CORS aperto (fetch browser-side OK). `gamma-api` no.
