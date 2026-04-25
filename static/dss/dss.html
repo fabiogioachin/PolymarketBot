@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DSS — Polymarket Decision Support</title>
+  <link rel="stylesheet" href="./dss.css" />
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <span class="logo">DSS</span>
+      <span class="subtitle">Decision Support — Polymarket</span>
+    </div>
+    <div class="header-right">
+      <span id="ws-pill" class="ws-pill ws-off" title="CLOB WebSocket status">WS off</span>
+      <span id="snapshot-banner" class="banner banner-missing">Loading…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="card collapsible" id="sec-markets">
+      <button type="button" class="card-head" aria-expanded="true" aria-controls="body-markets">
+        <span class="chev" aria-hidden="true">▾</span>
+        <span class="card-title">Monitored Markets</span>
+        <span class="card-count" id="count-markets">0</span>
+      </button>
+      <div class="card-body" id="body-markets">
+        <div class="table-wrap">
+          <table class="data-table" id="tbl-markets">
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th class="num">Price</th>
+                <th class="num">Fair</th>
+                <th class="num">Edge dyn</th>
+                <th class="num">Vol 1h</th>
+                <th>Reco</th>
+                <th>Spark (live CLOB)</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-markets"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card collapsible" id="sec-whales">
+      <button type="button" class="card-head" aria-expanded="true" aria-controls="body-whales">
+        <span class="chev" aria-hidden="true">▾</span>
+        <span class="card-title">Whale Feed Live</span>
+        <span class="card-count" id="count-whales">0</span>
+      </button>
+      <div class="card-body" id="body-whales">
+        <div class="table-wrap">
+          <table class="data-table" id="tbl-whales">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Market</th>
+                <th>Wallet</th>
+                <th>Side</th>
+                <th class="num">Size USD</th>
+                <th>Flags</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-whales"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card collapsible" id="sec-popular">
+      <button type="button" class="card-head" aria-expanded="true" aria-controls="body-popular">
+        <span class="chev" aria-hidden="true">▾</span>
+        <span class="card-title">Popular Markets &amp; Leaderboard</span>
+      </button>
+      <div class="card-body" id="body-popular">
+        <div class="tabs" role="tablist" aria-label="Popular and leaderboard tabs">
+          <button type="button" class="tab-btn active" role="tab" aria-selected="true" data-tab="popular">Popular (24h vol)</button>
+          <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="leaderboard">Leaderboard (PnL)</button>
+        </div>
+        <div class="tab-panel active" data-panel="popular">
+          <div class="table-wrap">
+            <table class="data-table" id="tbl-popular">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Market</th>
+                  <th class="num">Volume 24h</th>
+                  <th class="num">Liquidity</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-popular"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="tab-panel" data-panel="leaderboard">
+          <div class="table-wrap">
+            <table class="data-table" id="tbl-leaderboard">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Wallet</th>
+                  <th class="num">Total PnL</th>
+                  <th class="num">Weekly PnL</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-leaderboard"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card collapsible" id="sec-vae">
+      <button type="button" class="card-head" aria-expanded="true" aria-controls="body-vae">
+        <span class="chev" aria-hidden="true">▾</span>
+        <span class="card-title">VAE Signal Breakdown</span>
+        <span class="card-hint" id="vae-hint">— select a monitored market</span>
+      </button>
+      <div class="card-body" id="body-vae">
+        <div class="vae-controls">
+          <label for="vae-market-select">Market:</label>
+          <select id="vae-market-select" aria-label="Select market for VAE breakdown">
+            <option value="">—</option>
+          </select>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="tbl-vae">
+            <thead>
+              <tr>
+                <th>Signal</th>
+                <th class="num">Weight</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-vae"></tbody>
+          </table>
+        </div>
+        <p class="muted small">
+          Weights from snapshot <code>weights</code>. Per-signal probability values are not exported in the snapshot
+          (size cap); per-market <code>fair_value</code> and <code>edge_central</code> drive the BUY/SELL recommendation.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span id="footer-meta" class="muted small">DSS — vanilla JS, zero deps, served by nginx :5175</span>
+  </footer>
+
+  <script src="./dss.js"></script>
+</body>
+</html>

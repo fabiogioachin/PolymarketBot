@@ -1,6 +1,24 @@
 ## Active
 Lessons that affect future tasks. Target: under 15 entries.
 
+### 2026-04-25 — [tooling] Subagents possono avere Write/Edit/Bash denied dal sandbox del harness
+**Context**: Phase 13 W5 — dispatch parallelo S5a (frontend-specialist, opus) + S5b (general-purpose, sonnet) per scope file disgiunti.
+**What happened**: Entrambi i subagent hanno restituito `BLOCKED` immediato senza scrivere/modificare un singolo file. S5a: tentativi `Write`, `Bash touch`, `PowerShell New-Item` — tutti negati. S5b: `Edit` negato sul primo file. I tool sono *visibili* nello schema dei subagent (no `disabled_tools`) ma il sandbox di permessi del harness li blocca runtime. Costo: 2 round-trip persi (~3 min wall-clock + token), ma i due agent hanno comunque restituito un piano d'edit dettagliato e accurato che è stato eseguito nel main turn senza re-pianificazione.
+**Root cause**: Il sandbox di permission mode (auto/plan/etc) può negare i write tool ai subagent anche quando lo stesso tool è permesso al main agent. Non c'è feedback up-front: il subagent scopre la denial al primo tool call.
+**Action**: Per task di file-write puro (no ricerca pesante né reasoning isolato), preferire l'esecuzione diretta nel main turn, specialmente in auto-mode. Quando si delega comunque, includere nel prompt: *"Se Write/Edit/Bash falliscono per permission denial, restituisci IMMEDIATAMENTE un edit-plan strutturato (file → diff esatto in HEREDOC) come BLOCKED status — non tentare altri tool."* Il piano dettagliato è recuperabile; un re-dispatch in main session è O(minuti), un retry blind del subagent è O(ore).
+
+### 2026-04-24 — [tooling] Background Agent silent-hang: transcript 0B ≠ agent failed
+**Context**: Phase 13 W4 — S4b (opus, backend-specialist) dispatched in background parallel a S4a. S4a completa regolarmente con summary; S4b "appare" stuck — transcript file resta 0 bytes per ~50 min senza notifica di completamento.
+**What happened**: Temptation di concludere "agent failed" basandosi solo sul transcript vuoto e assenza di notifica. Ma i file prodotti esistevano (whale_pressure.py, insider_pressure.py, tests, yaml_config.py, engine.py tutti modificati). `TaskOutput` non-blocking confermò status=running. Dopo `TaskStop` (task non più trovato), test diretto sui 4 file target → 40/40 pass. Il lavoro era completo e corretto; solo la finalizzazione del summary è mancata.
+**Root cause**: Background agent può perdere il canale di uscita finale (transcript buffer non flushato, runtime terminato prima di emettere il tool_result finale) ma lasciare il filesystem in stato coerente. Il transcript 0B non è sinonimo di "agent non ha fatto nulla".
+**Action**: Prima di dichiarare un agent fallito: (1) verifica presenza file attesi con `Glob` + timestamp; (2) esegui i test che l'agent doveva produrre — se verdi, il lavoro è completo a prescindere dal summary mancato; (3) solo dopo `TaskStop` + verifica che il process è morto considera re-dispatch. NON re-dispatchare lo stesso task se il codice esiste già: rischio di overwrite o duplicazione.
+
+### 2026-04-24 — [tooling] Hook `protect-critical-files.sh` blocca anche `.env.example`
+**Context**: Chiusura GAP 1 Phase 13 S3 — aggiunta `# THEGRAPH_API_KEY=` commentata in `.env.example`.
+**What happened**: Sia backend-specialist sia orchestrator bloccati con `BLOCKED: .env files contain credentials and must be edited manually`. Nessun bypass documentato nel hook.
+**Root cause**: Il regex al rigo 12 di `~/.claude/hooks/protect-critical-files.sh` è `'/\.env(\..*)?$'` — `\..*` greedy cattura `.example`, `.local`, ecc. Intenzionale (previene leak credenziali nei template committed) ma tratta `.example` — file di documentazione — come i `.env` reali.
+**Action**: Per modifiche a `.env.example` (o qualsiasi `.env*`) prevedere fin dal planning: azione manuale utente, oppure rilassare il regex a `'/\.env$'` o `'/\.env\.(local|prod|dev)$'` per consentire i template. Non dispatch-are agent per quel singolo file o sprecheremo round-trip. Tabella `trader_leaderboard` e resto S2/S3 chiusi normalmente; solo il marker `.env.example` è rimasto open — non-bloccante (client fail-soft su free tier).
+
 ### 2026-04-23 — [codebase] Static edge ignora volatility regime
 **Context**: Phase 13 kickoff — utente evidenzia "IL TIMING è IL PIù GRANDE EDGE"
 **What happened**: `fee_adjusted_edge` scalare non distingue 3% su vol 0.3% (alpha) da 3% su vol 5% (rumore). Gating omogeneo → trade rumorosi.

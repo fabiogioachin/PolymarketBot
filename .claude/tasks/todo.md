@@ -16,20 +16,24 @@
 | W1 | S1 Dynamic edge | [x] 2026-04-24 |
 | W2 | S2 Collectors (trades, popular, leaderboard) | [x] 2026-04-24 |
 | W3 | S3 Subgraph client | [x] 2026-04-24 |
-| W4 | S4a Snapshot writer + Docker profiles // S4b Whale/insider VAE | [ ] / [ ] |
-| W5 | S5a DSS artifact // S5b Dashboard widgets | [ ] / [ ] |
+| W4 | S4a Snapshot writer + Docker profiles // S4b Whale/insider VAE | [x] / [x] 2026-04-24 |
+| W5 | S5a DSS artifact // S5b Dashboard widgets | [x] / [x] 2026-04-25 |
 
 ### Session plans
 
 - [x] [S1 Dynamic edge](.claude/plans/phase-13/S1-dynamic-edge.md) — 10 new tests
 - [x] [S2 Collectors](.claude/plans/phase-13/S2-collectors.md) — 33 new tests
 - [x] [S3 Subgraph client](.claude/plans/phase-13/S3-subgraph.md) — 21 new tests
-- [ ] [S4a Snapshot writer](.claude/plans/phase-13/S4a-snapshot-writer.md)
-- [ ] [S4b Whale/insider VAE](.claude/plans/phase-13/S4b-whale-insider-vae.md)
-- [ ] [S5a DSS artifact](.claude/plans/phase-13/S5a-dss-artifact.md)
-- [ ] [S5b Dashboard widgets](.claude/plans/phase-13/S5b-dashboard-widgets.md)
+- [x] [S4a Snapshot writer](.claude/plans/phase-13/S4a-snapshot-writer.md) — 9 new tests (DSS contract, atomic write, size cap)
+- [x] [S4b Whale/insider VAE](.claude/plans/phase-13/S4b-whale-insider-vae.md) — 40 new tests (whale/insider/engine integration + yaml sum validator)
+- [x] [S5a DSS artifact](.claude/plans/phase-13/S5a-dss-artifact.md) — 3 new files (`static/dss/dss.html|.js|.css`), self-contained vanilla JS, CORS direct to clob, WS reconnect-with-backoff, localStorage cache, ASCII sparkline
+- [x] [S5b Dashboard widgets](.claude/plans/phase-13/S5b-dashboard-widgets.md) — DSS link in header, whale counter tile (1h, 30s poll), Vol 1h column with sparkline + color coding, cache bust v=13→v=14, SSE payload extended (realized_volatility/price_history_60min as None/[] with TODO Phase 14: ValuationResultStore)
 
-**Baseline post-W3:** 826 pass, 0 fail. (+65 vs. pre-Phase 13, inclusi fix isolation `test_debug_risk_kb_rows`.)
+**Baseline post-W4:** 361 pass (execution+core+valuation+services), 0 fail. W4 adds 49 tests (9 S4a + 40 S4b). Integrazione end-to-end verde: whale/insider signals via `external_signals` in VAE, DSS snapshot_writer triggered da `engine.tick()` dopo `assess_batch()`, config esteso (weights +2 @ 0.05 → nominal 1.10 / effective ~1.00 con manifold off; nuova sezione `dss.snapshot_writer`).
+
+**W4 merge orchestrator-side (post-agent):** `_last_valuations` attr + `snapshot_writer.tick()` call in `app/execution/engine.py` (import lazy per circolare), `DssSnapshotWriterConfig`/`DssConfig` in `app/core/yaml_config.py`, blocco `dss:` + pesi whale/insider in `config/config.example.yaml`. `ExecutionEngine.__init__` NON esteso con `snapshot_writer` — wired via late-binding setters in `get_execution_engine()`.
+
+**Gap tecnico pendente (azione manuale utente):** aggiungere `# THEGRAPH_API_KEY=` commentato a `.env.example`. Il hook `~/.claude/hooks/protect-critical-files.sh` blocca ogni edit automatico su `.env*` (regex cattura anche `.env.example`). Non-bloccante: client fail-soft su free tier senza var.
 
 ---
 

@@ -308,6 +308,28 @@ function closePopup() {
 
 // ── Positions Panel ──────────────────────────────────────────────────
 
+// Sparkline: render an array of floats as 8-level Unicode bars (▁▂▃▄▅▆▇█).
+// Inlined per Phase 13 S5b spec — duplicated in static/dss/dss.js so the DSS
+// remains zero-dependency and self-contained.
+function renderSparkline(prices) {
+  if (!Array.isArray(prices) || prices.length === 0) return "";
+  var chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+  var min = Math.min.apply(null, prices);
+  var max = Math.max.apply(null, prices);
+  var range = max - min || 1;
+  return prices.map(function (p) {
+    return chars[Math.floor(((p - min) / range) * 7)];
+  }).join("");
+}
+
+function volClass(v) {
+  if (v === null || v === undefined || isNaN(v)) return "";
+  var n = Number(v);
+  if (n < 0.01) return "vol-green";
+  if (n < 0.03) return "vol-yellow";
+  return "vol-red";
+}
+
 function renderPositions(positions) {
   _positionsData = positions || [];
   var tbody = document.getElementById("positions-tbody");
@@ -315,7 +337,7 @@ function renderPositions(positions) {
   if (!tbody) return;
 
   if (!positions || positions.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px">No open positions</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px">No open positions</td></tr>';
     if (totalEl) totalEl.textContent = "";
     return;
   }
@@ -335,6 +357,12 @@ function renderPositions(positions) {
       var decision = p.decision || (p.side + " " + (p.outcome || ""));
       var decisionCls = (p.outcome || "").toLowerCase() === "yes" ? "positive" : "negative";
 
+      var vol = (p.realized_volatility !== null && p.realized_volatility !== undefined) ? Number(p.realized_volatility) : null;
+      var volStr = vol === null || isNaN(vol) ? "—" : (vol * 100).toFixed(2) + "%";
+      var spark = renderSparkline(p.price_history_60min || []);
+      var volCell = '<td class="' + volClass(vol) + '" style="font-size:12px">' + volStr +
+        (spark ? ' <span class="sparkline-cell">' + spark + '</span>' : '') + '</td>';
+
       return '<tr style="cursor:pointer" onclick="showPopup(_positionsData[' + idx + '])">' +
         '<td style="max-width:280px"><strong>' + escapeHtml(truncate(question, 50)) + '</strong>' + catBadge + '</td>' +
         '<td><span class="badge badge-blue">' + escapeHtml(p.strategy) + '</span>' +
@@ -343,6 +371,7 @@ function renderPositions(positions) {
         '<td>' + formatNum(p.cost_basis, 2) + '</td>' +
         '<td class="metric-value ' + pnlCls + '" style="font-size:13px">' + sign + formatNum(pnl, 4) + ' <span style="font-size:11px;opacity:0.7">(' + pnlPctStr + ')</span></td>' +
         '<td style="font-size:11px;color:var(--text-muted)">edge ' + formatNum(p.edge_at_entry, 3) + '</td>' +
+        volCell +
         '</tr>';
     })
     .join("");
@@ -713,6 +742,23 @@ function set(id, value) {
   if (el) el.textContent = value;
 }
 
+// ── Whale Counter (header tile) ──────────────────────────────────────
+
+async function refreshWhaleCounter() {
+  var el = document.getElementById("m-whales-1h");
+  if (!el) return;
+  try {
+    var resp = await fetch("/api/v1/intelligence/whales?since=1h");
+    if (!resp.ok) throw new Error(resp.status + " " + resp.statusText);
+    var whales = await resp.json();
+    var count = Array.isArray(whales) ? whales.length : (whales.count || 0);
+    el.textContent = count;
+  } catch (err) {
+    console.warn("Whale counter refresh failed:", err);
+    el.textContent = "—";
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", function () {
@@ -723,4 +769,8 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // Start SSE connection
   connectSSE();
+
+  // Whale counter — initial fetch + 30s poll
+  refreshWhaleCounter();
+  setInterval(refreshWhaleCounter, 30000);
 });

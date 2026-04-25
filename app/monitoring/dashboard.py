@@ -234,6 +234,13 @@ async def _build_positions() -> tuple[list[dict[str, object]], float]:
             "volume": round(volume, 0),
             "volume_24h": round(volume_24h, 0),
             "resolution_source": resolution_source[:100],
+            # Phase 13 S5b: volatility surface for the dashboard.
+            # TODO(Phase 14): wire a ValuationResultStore so the SSE layer can
+            # read realized_volatility + price history without re-running the
+            # VAE. For now both fields are emitted as null/[] so the frontend
+            # renders a placeholder dash without breaking layout.
+            "realized_volatility": None,
+            "price_history_60min": [],
         })
 
     total_pnl = round(sum(float(p["unrealized_pnl"]) for p in result), 4)

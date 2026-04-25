@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PolymarketBot Dashboard</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=13" />
+  <link rel="stylesheet" href="/static/css/style.css?v=14" />
 </head>
 <body>
 
@@ -18,6 +18,10 @@
       </div>
     </div>
     <div class="header-right">
+      <a href="http://localhost:5175/dss.html" target="_blank" rel="noopener" class="btn-dss"
+         title="Decision Support — sempre disponibile anche con backend spento">
+        &#128202; Open DSS Artifact
+      </a>
       <div class="status-indicator" id="sse-indicator">
         <div class="status-dot" id="sse-dot"></div>
         <span id="sse-label">Connecting...</span>
@@ -71,6 +75,10 @@
           <div class="metric-label">Tick Count</div>
           <div class="metric-value neutral" id="m-tick-count">&mdash;</div>
         </div>
+        <div class="metric-card whale-counter">
+          <div class="metric-label">&#128011; Whales (1h)</div>
+          <div class="metric-value neutral" id="m-whales-1h">&mdash;</div>
+        </div>
       </div>
 
       <!-- Open Positions -->
@@ -86,11 +94,12 @@
                 <th>Size</th>
                 <th>P&amp;L</th>
                 <th>Edge</th>
+                <th>Vol 1h</th>
               </tr>
             </thead>
             <tbody id="positions-tbody">
               <tr>
-                <td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px">
+                <td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px">
                   Waiting for data...
                 </td>
               </tr>
@@ -245,6 +254,6 @@
 
   </main>
 
-  <script src="/static/js/app.js?v=13"></script>
+  <script src="/static/js/app.js?v=14"></script>
 </body>
 </html>

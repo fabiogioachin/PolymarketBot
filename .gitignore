@@ -42,6 +42,9 @@ data/
 node_modules/
 static/dist/
 
+# DSS runtime artifact (regenerated every 5 min by snapshot_writer)
+static/dss/intelligence_snapshot.json
+
 # OS
 .DS_Store
 Thumbs.db

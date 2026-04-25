@@ -603,3 +603,44 @@ tbody td.label {
   font-size: 12px;
   margin: 8px 0;
 }
+
+/* ── Phase 13 S5b: DSS link + sparkline + whale counter ──────────── */
+
+.btn-dss {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(88, 166, 255, 0.10);
+  color: var(--accent-blue);
+  border: 1px solid rgba(88, 166, 255, 0.40);
+  border-radius: var(--radius);
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-dss:hover {
+  background: rgba(88, 166, 255, 0.20);
+  border-color: var(--accent-blue);
+}
+.btn-dss:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.sparkline-cell {
+  font-family: var(--font-mono);
+  letter-spacing: -1px;
+  color: var(--accent-blue);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.vol-green  { color: var(--accent-green); }
+.vol-yellow { color: var(--accent-yellow); }
+.vol-red    { color: var(--accent-red); }
+
+.whale-counter .metric-label {
+  white-space: nowrap;
+}
