@@ -31,6 +31,8 @@ from app.models.valuation import ValuationResult
 from app.risk.circuit_breaker import CircuitBreaker
 from app.risk.manager import RiskManager
 from app.strategies.registry import StrategyRegistry
+from app.valuation.insider_pressure import compute_insider_pressure
+from app.valuation.whale_pressure import compute_whale_pressure
 
 if TYPE_CHECKING:
     from app.models.market import Market
@@ -72,6 +74,7 @@ class ExecutionEngine:
         risk_kb: Any = None,
         whale_orchestrator: Any = None,
         popular_markets_orchestrator: Any = None,
+        leaderboard_orchestrator: Any = None,
     ) -> None:
         self._executor = executor
         self._risk = risk_manager
@@ -86,6 +89,7 @@ class ExecutionEngine:
         self._risk_kb = risk_kb
         self._whale_orchestrator = whale_orchestrator
         self._popular_markets_orchestrator = popular_markets_orchestrator
+        self._leaderboard_orchestrator = leaderboard_orchestrator
         self._running = False
         self._tick_count = 0
         self._last_tick: datetime | None = None
@@ -96,6 +100,9 @@ class ExecutionEngine:
         self._last_intel_refresh: datetime | None = None
         self._last_whale_refresh: datetime | None = None
         self._last_popular_refresh: datetime | None = None
+        self._last_leaderboard_refresh: datetime | None = None
+        # Phase 13 S4a: cache of last valuations for DSS SnapshotWriter to read
+        self._last_valuations: dict[str, ValuationResult] = {}
         # WebSocket orderbook cache (background task)
         self._ws_client = PolymarketWsClient()
         self._orderbook_cache: dict[str, OrderBook] = {}
@@ -145,10 +152,15 @@ class ExecutionEngine:
         # 2b-bis. Fetch whale trades (Phase 13 S2)
         if self._whale_orchestrator is not None:
             await self._fetch_whale_signals(markets, now)
+            await self._inject_whale_pressure_signals(markets, external_signals)
 
         # 2b-ter. Snapshot popular markets (Phase 13 S2)
         if self._popular_markets_orchestrator is not None:
             await self._fetch_popular_markets(now)
+
+        # 2b-quater. Snapshot leaderboard (Phase 13 S2)
+        if self._leaderboard_orchestrator is not None:
+            await self._fetch_leaderboard(now)
 
         # 2c. Fetch KG pattern signals from Obsidian vault
         await self._fetch_kg_signals(markets, external_signals)
@@ -176,6 +188,17 @@ class ExecutionEngine:
             for v in assessed:
                 valuations[v.market_id] = v
         result.markets_assessed = len(valuations)
+
+        # Phase 13 S4a: expose valuations for DSS SnapshotWriter + trigger tick.
+        # SnapshotWriter reads `self._last_valuations` and writes
+        # static/dss/intelligence_snapshot.json on a 5-min cadence (internal dedup).
+        self._last_valuations = valuations
+        try:
+            from app.core.dependencies import get_snapshot_writer
+
+            await get_snapshot_writer().tick()
+        except Exception as exc:
+            logger.warning("snapshot_writer_tick_failed", error=str(exc))
 
         # 4. UPDATE open positions with live prices + EVALUATE exits
         exited_market_ids: set[str] = set()
@@ -552,6 +575,72 @@ class ExecutionEngine:
         except Exception as exc:
             logger.warning("whale_fetch_failed", error=str(exc))
 
+    async def _inject_whale_pressure_signals(
+        self,
+        markets: list[Market],
+        external_signals: dict[str, dict[str, Any]],
+    ) -> None:
+        """Compute whale_pressure + insider_pressure per market (Phase 13 S4b).
+
+        Reads recent whale activity from the store-backed orchestrator and
+        injects the resulting signals into ``external_signals`` so the VAE
+        picks them up via ``assess_batch``. Failures per-market are swallowed
+        defensively to never break the tick.
+        """
+        if self._whale_orchestrator is None:
+            return
+
+        # Lookback windows (minutes) — whale=6h, insider=24h pre-res scan
+        whale_window_min = 360
+        insider_window_min = 1440
+
+        for market in markets:
+            market_price = 0.5
+            for outcome in market.outcomes:
+                if outcome.outcome.lower() == "yes":
+                    market_price = outcome.price
+                    break
+
+            try:
+                whale_trades = await self._whale_orchestrator.get_whale_activity(
+                    market.id, since_minutes=whale_window_min
+                )
+            except Exception as exc:
+                logger.debug(
+                    "whale_pressure_fetch_failed",
+                    market_id=market.id,
+                    error=str(exc),
+                )
+                continue
+
+            whale_signal = compute_whale_pressure(
+                whale_trades, market_price=market_price
+            )
+            if whale_signal != 0.5:
+                external_signals.setdefault(market.id, {})[
+                    "whale_pressure"
+                ] = whale_signal
+
+            try:
+                pre_res_trades = await self._whale_orchestrator.get_whale_activity(
+                    market.id, since_minutes=insider_window_min
+                )
+            except Exception as exc:
+                logger.debug(
+                    "insider_pressure_fetch_failed",
+                    market_id=market.id,
+                    error=str(exc),
+                )
+                continue
+
+            insider_signal = compute_insider_pressure(
+                market, pre_res_trades, market_price=market_price
+            )
+            if insider_signal != 0.5:
+                external_signals.setdefault(market.id, {})[
+                    "insider_pressure"
+                ] = insider_signal
+
     async def _fetch_popular_markets(self, now: datetime) -> None:
         """Snapshot top-N markets by 24h volume on a slow cadence."""
         from app.core.yaml_config import app_config
@@ -572,6 +661,29 @@ class ExecutionEngine:
                 logger.info("popular_markets_snapshot", count=len(snapshot))
         except Exception as exc:
             logger.warning("popular_markets_fetch_failed", error=str(exc))
+
+    async def _fetch_leaderboard(self, now: datetime) -> None:
+        """Snapshot top traders by PnL on a slow cadence."""
+        from app.core.yaml_config import app_config
+
+        interval = (
+            app_config.intelligence.leaderboard.tick_interval_minutes * 60
+        )
+        if (
+            self._last_leaderboard_refresh is not None
+            and (now - self._last_leaderboard_refresh).total_seconds() < interval
+        ):
+            return
+
+        try:
+            snapshot = await self._leaderboard_orchestrator.tick(
+                timeframe="monthly"
+            )
+            self._last_leaderboard_refresh = now
+            if snapshot:
+                logger.info("leaderboard_snapshot", count=len(snapshot))
+        except Exception as exc:
+            logger.warning("leaderboard_fetch_failed", error=str(exc))
 
     async def _fetch_manifold_signals(
         self, markets: list[Market], now: datetime

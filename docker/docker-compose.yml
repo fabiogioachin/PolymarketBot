@@ -1,6 +1,7 @@
 name: polymarket_bot
 services:
   backend:
+    profiles: ["full"]
     build:
       context: ..
       dockerfile: docker/backend.Dockerfile
@@ -12,6 +13,7 @@ services:
       - ../config:/app/config
       - ../data:/app/data
       - ../logs:/app/logs
+      - ../static/dss:/app/static/dss
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/api/v1/health')"]
@@ -20,6 +22,7 @@ services:
       retries: 3
 
   frontend:
+    profiles: ["full"]
     build:
       context: ..
       dockerfile: docker/frontend.Dockerfile
@@ -28,4 +31,14 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    restart: unless-stopped
+
+  frontend-dss:
+    profiles: ["full", "dss-only"]
+    image: nginx:alpine
+    ports:
+      - "5175:80"
+    volumes:
+      - ../static/dss:/usr/share/nginx/html:ro
+      - ./nginx-dss.conf:/etc/nginx/nginx.conf:ro
     restart: unless-stopped

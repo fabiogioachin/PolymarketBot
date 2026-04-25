@@ -15,11 +15,13 @@ if TYPE_CHECKING:
     from app.risk.manager import RiskManager
     from app.services.bot_service import BotService
     from app.services.intelligence_orchestrator import IntelligenceOrchestrator
+    from app.services.leaderboard_orchestrator import LeaderboardOrchestrator
     from app.services.manifold_service import ManifoldService
     from app.services.market_service import MarketService
     from app.services.popular_markets_orchestrator import (
         PopularMarketsOrchestrator,
     )
+    from app.services.snapshot_writer import SnapshotWriter
     from app.services.whale_orchestrator import WhaleOrchestrator
     from app.strategies.registry import StrategyRegistry
     from app.valuation.engine import ValueAssessmentEngine
@@ -40,7 +42,9 @@ _manifold_service: ManifoldService | None = None
 _intelligence_orchestrator: IntelligenceOrchestrator | None = None
 _whale_orchestrator: WhaleOrchestrator | None = None
 _popular_markets_orchestrator: PopularMarketsOrchestrator | None = None
+_leaderboard_orchestrator: LeaderboardOrchestrator | None = None
 _subgraph_client: PolymarketSubgraphClient | None = None
+_snapshot_writer: SnapshotWriter | None = None
 
 
 # ── Lazy accessors ───────────────────────────────────────────────────
@@ -132,6 +136,40 @@ def get_popular_markets_orchestrator() -> PopularMarketsOrchestrator:
         _popular_markets_orchestrator = PopularMarketsOrchestrator()
         logger.info("popular_markets_orchestrator_initialized")
     return _popular_markets_orchestrator
+
+
+def get_leaderboard_orchestrator() -> LeaderboardOrchestrator:
+    """Get LeaderboardOrchestrator singleton (top traders by PnL)."""
+    global _leaderboard_orchestrator  # noqa: PLW0603
+    if _leaderboard_orchestrator is None:
+        from app.services.leaderboard_orchestrator import (
+            LeaderboardOrchestrator,
+        )
+
+        _leaderboard_orchestrator = LeaderboardOrchestrator()
+        logger.info("leaderboard_orchestrator_initialized")
+    return _leaderboard_orchestrator
+
+
+def get_snapshot_writer() -> SnapshotWriter:
+    """Get SnapshotWriter singleton (DSS intelligence_snapshot.json writer).
+
+    Wires all available dependencies via the late-binding setter pattern.
+    Returns the singleton regardless of whether dependencies are ready — each
+    setter call is idempotent and safe to call before or after construction of
+    the other services.
+    """
+    global _snapshot_writer  # noqa: PLW0603
+    if _snapshot_writer is None:
+        from pathlib import Path
+
+        from app.services.snapshot_writer import SnapshotWriter
+
+        _snapshot_writer = SnapshotWriter(
+            output_path=Path("static/dss/intelligence_snapshot.json")
+        )
+        logger.info("snapshot_writer_initialized")
+    return _snapshot_writer
 
 
 async def get_risk_kb() -> RiskKnowledgeBase:
@@ -256,6 +294,11 @@ async def get_execution_engine() -> ExecutionEngine:
             pop_orch = get_popular_markets_orchestrator()
             await pop_orch.set_trade_store(store)
 
+        lb_orch = None
+        if app_config.intelligence.leaderboard.enabled:
+            lb_orch = get_leaderboard_orchestrator()
+            await lb_orch.set_trade_store(store)
+
         # Knowledge service (Obsidian KG patterns): only if Obsidian is enabled
         knowledge_service = None
         if app_config.intelligence.obsidian.enabled:
@@ -279,8 +322,23 @@ async def get_execution_engine() -> ExecutionEngine:
             risk_kb=risk_kb,
             whale_orchestrator=whale_orch,
             popular_markets_orchestrator=pop_orch,
+            leaderboard_orchestrator=lb_orch,
         )
         await _execution_engine.restore_from_store()
+
+        # Phase 13 S4a: wire SnapshotWriter with all available dependencies.
+        # NOTE: snapshot_writer.tick() is NOT yet called from engine.tick() —
+        # the orchestrator will add that call after S4b is merged.
+        snapshot_writer = get_snapshot_writer()
+        snapshot_writer.set_engine(_execution_engine)
+        snapshot_writer.set_trade_store(store)
+        if whale_orch is not None:
+            snapshot_writer.set_whale_orchestrator(whale_orch)
+        if pop_orch is not None:
+            snapshot_writer.set_popular_markets_orchestrator(pop_orch)
+        if lb_orch is not None:
+            snapshot_writer.set_leaderboard_orchestrator(lb_orch)
+
     return _execution_engine
 
 

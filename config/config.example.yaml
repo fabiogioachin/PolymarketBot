@@ -46,6 +46,10 @@ valuation:
     temporal: 0.05
     crowd_calibration: 0.05
     cross_platform: 0.10
+    whale_pressure: 0.05       # Phase 13 S4b — event-style (independent prob)
+    insider_pressure: 0.05     # Phase 13 S4b — microstructure-style (centered on price)
+    # Nominal sum: 1.10. Effective ≈ 1.00 with manifold disabled (cross_platform=0).
+    # Validator accepts [0.95, 1.15] — fair_value normalizes by effective weight_total.
   thresholds:
     min_edge: 0.05
     min_edge_short: 0.03     # short horizon: 3% edge (fast turnover compensates)
@@ -162,3 +166,12 @@ llm:
     - daily_digest
   max_daily_calls: 20
   model: claude-sonnet-4-6
+
+dss:
+  # Phase 13 S4a — Decision Support System live artifact.
+  # SnapshotWriter writes static/dss/intelligence_snapshot.json every N minutes;
+  # the standalone dss.html (S5a) polls this file. Safe to disable in live mode.
+  snapshot_writer:
+    enabled: true
+    output_path: "static/dss/intelligence_snapshot.json"
+    tick_interval_minutes: 5

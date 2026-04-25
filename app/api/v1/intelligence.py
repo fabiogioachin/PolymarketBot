@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.core.dependencies import (
     get_intelligence_orchestrator,
+    get_leaderboard_orchestrator,
     get_popular_markets_orchestrator,
     get_whale_orchestrator,
 )
@@ -149,25 +150,25 @@ async def get_leaderboard(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[LeaderboardEntry]:
     """Return the latest leaderboard snapshot for a timeframe."""
-    from app.core.dependencies import get_execution_engine
-
-    engine = await get_execution_engine()
-    store = engine._store
-    if store is None:
-        return []
-    rows = await store.load_latest_leaderboard(timeframe, limit)
-    return [
-        LeaderboardEntry(
-            rank=int(r["rank"]),
-            wallet_address=str(r["wallet_address"]),
-            pnl_usd=float(r["pnl_usd"]),
-            win_rate=(
-                float(r["win_rate"]) if r.get("win_rate") is not None else None
-            ),
-            timeframe=str(r["timeframe"]),
-            snapshot_time=datetime.fromtimestamp(
-                float(r["snapshot_time"]), tz=UTC
-            ),
-        )
-        for r in rows
-    ]
+    orch = get_leaderboard_orchestrator()
+    snapshot = orch.get_leaderboard(timeframe)
+    if not snapshot and orch._trade_store is not None:
+        rows = await orch._trade_store.load_latest_leaderboard(timeframe, limit)
+        snapshot = [
+            LeaderboardEntry(
+                rank=int(r["rank"]),
+                wallet_address=str(r["wallet_address"]),
+                pnl_usd=float(r["pnl_usd"]),
+                win_rate=(
+                    float(r["win_rate"])
+                    if r.get("win_rate") is not None
+                    else None
+                ),
+                timeframe=str(r["timeframe"]),
+                snapshot_time=datetime.fromtimestamp(
+                    float(r["snapshot_time"]), tz=UTC
+                ),
+            )
+            for r in rows
+        ]
+    return snapshot[:limit]

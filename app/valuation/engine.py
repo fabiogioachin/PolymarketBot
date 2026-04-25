@@ -51,6 +51,8 @@ class ValueAssessmentEngine:
         pattern_kg_signal: float | None = None,
         rule_analysis_score: float | None = None,
         cross_platform_signal: float | None = None,
+        whale_pressure: float | None = None,
+        insider_pressure: float | None = None,
     ) -> ValuationResult:
         """Assess a single market's fair value.
 
@@ -96,6 +98,8 @@ class ValueAssessmentEngine:
             pattern_kg_signal=pattern_kg_signal,
             cross_platform_signal=cross_platform_signal,
             temporal_factor=temporal_factor,
+            whale_pressure_signal=whale_pressure,
+            insider_pressure_signal=insider_pressure,
         )
 
         # Compute fair value
@@ -406,6 +410,49 @@ class ValueAssessmentEngine:
                     contribution=round(cp_prob - inputs.market_price, 4),
                     confidence=conf,
                     detail=f"Manifold signal: {cp_prob:.3f}",
+                )
+            )
+            confidence_sum += conf
+            source_count += 1
+
+        # Whale pressure — event-style (independent probability, Phase 13 S4b D3).
+        # Signal is already a probability in [0, 1]: 0.5=neutral, >0.5=BUY pressure.
+        if inputs.whale_pressure_signal is not None:
+            w = self._weights.whale_pressure
+            whale_prob = max(0.0, min(1.0, inputs.whale_pressure_signal))
+            weighted_sum += w * whale_prob
+            weight_total += w
+            divergence = abs(whale_prob - inputs.market_price)
+            conf = 0.6 if divergence > 0.1 else 0.3
+            sources.append(
+                EdgeSource(
+                    name="whale_pressure",
+                    contribution=round(whale_prob - inputs.market_price, 4),
+                    confidence=conf,
+                    detail=f"Whale pressure: {whale_prob:.3f}",
+                )
+            )
+            confidence_sum += conf
+            source_count += 1
+
+        # Insider pressure — microstructure-style (nudge centred on market_price,
+        # Phase 13 S4b D3). Signal in [0, 1] with 0.5 = neutral; scale to a
+        # small ±0.05 probability adjustment so it never dominates.
+        if inputs.insider_pressure_signal is not None:
+            w = self._weights.insider_pressure
+            insider_prob = inputs.market_price + (inputs.insider_pressure_signal - 0.5) * 0.1
+            insider_prob = max(0.01, min(0.99, insider_prob))
+            weighted_sum += w * insider_prob
+            weight_total += w
+            # Confidence: higher when the signal is far from neutral
+            deviation = abs(inputs.insider_pressure_signal - 0.5)
+            conf = 0.6 if deviation > 0.15 else 0.3
+            sources.append(
+                EdgeSource(
+                    name="insider_pressure",
+                    contribution=round(insider_prob - inputs.market_price, 4),
+                    confidence=conf,
+                    detail=f"Insider pressure: {inputs.insider_pressure_signal:.3f}",
                 )
             )
             confidence_sum += conf

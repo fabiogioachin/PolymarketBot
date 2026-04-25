@@ -1,9 +1,10 @@
 """YAML configuration loader with Pydantic validation."""
 
 from pathlib import Path
+from typing import Self
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _CONFIG_PATH = _PROJECT_ROOT / "config" / "config.yaml"
@@ -72,15 +73,37 @@ class RiskConfig(BaseModel):
 
 
 class WeightsConfig(BaseModel):
-    base_rate: float = 0.15
-    rule_analysis: float = 0.15
-    microstructure: float = 0.15
-    cross_market: float = 0.10
-    event_signal: float = 0.15
-    pattern_kg: float = 0.10
-    temporal: float = 0.05
-    crowd_calibration: float = 0.05
-    cross_platform: float = 0.10
+    """VAE signal weights.
+
+    Nominal sum is 1.10 with ``whale_pressure`` + ``insider_pressure`` enabled
+    (Phase 13 S4b). Effective sum is ~1.00 when ``intelligence.manifold`` is
+    disabled (``cross_platform`` contributes 0). The validator accepts any
+    sum in [0.95, 1.15] to let operators rebalance without breaking startup.
+    """
+
+    base_rate: float = Field(default=0.15, ge=0.0, le=1.0)
+    rule_analysis: float = Field(default=0.15, ge=0.0, le=1.0)
+    microstructure: float = Field(default=0.15, ge=0.0, le=1.0)
+    cross_market: float = Field(default=0.10, ge=0.0, le=1.0)
+    event_signal: float = Field(default=0.15, ge=0.0, le=1.0)
+    pattern_kg: float = Field(default=0.10, ge=0.0, le=1.0)
+    temporal: float = Field(default=0.05, ge=0.0, le=1.0)
+    crowd_calibration: float = Field(default=0.05, ge=0.0, le=1.0)
+    cross_platform: float = Field(default=0.10, ge=0.0, le=1.0)
+    whale_pressure: float = Field(default=0.05, ge=0.0, le=1.0)       # Phase 13 S4b
+    insider_pressure: float = Field(default=0.05, ge=0.0, le=1.0)     # Phase 13 S4b
+
+    @model_validator(mode="after")
+    def _validate_sum(self) -> Self:
+        total = sum(
+            v for v in self.model_dump().values()
+            if isinstance(v, int | float)
+        )
+        if not (0.95 <= total <= 1.15):
+            raise ValueError(
+                f"weights nominal sum {total:.3f} outside [0.95, 1.15]"
+            )
+        return self
 
 
 class ThresholdsConfig(BaseModel):
@@ -211,6 +234,22 @@ class IntelligenceConfig(BaseModel):
     subgraph: SubgraphConfig = Field(default_factory=SubgraphConfig)
 
 
+class DssSnapshotWriterConfig(BaseModel):
+    """Phase 13 S4a: DSS snapshot writer cadence and output path."""
+
+    enabled: bool = True
+    output_path: str = "static/dss/intelligence_snapshot.json"
+    tick_interval_minutes: int = 5
+
+
+class DssConfig(BaseModel):
+    """Phase 13 S4a: Decision Support System configuration."""
+
+    snapshot_writer: DssSnapshotWriterConfig = Field(
+        default_factory=DssSnapshotWriterConfig
+    )
+
+
 class AlertRule(BaseModel):
     type: str
     min_edge: float | None = None
@@ -266,6 +305,7 @@ class AppConfig(BaseModel):
     strategies: StrategiesConfig = Field(default_factory=StrategiesConfig)
     telegram: TelegramAlertConfig = Field(default_factory=TelegramAlertConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
+    dss: DssConfig = Field(default_factory=DssConfig)
 
 
 # ── Loader ────────────────────────────────────────────────────────────

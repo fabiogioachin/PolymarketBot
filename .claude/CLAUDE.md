@@ -20,7 +20,7 @@
 - `app/models/` — Pydantic models (data, not logic)
 - `app/clients/` — external API wrappers (Polymarket, Manifold, GDELT, RSS, Telegram, LLM)
 - `app/services/` — business logic orchestration (bot, market, manifold, knowledge, intelligence, news)
-- `app/valuation/` — Value Assessment Engine (CORE) — 9 weighted signals
+- `app/valuation/` — Value Assessment Engine (CORE) — 11 weighted signals
 - `app/strategies/` — trading strategies (7 strategies, use valuation output)
 - `app/knowledge/` — risk KB + Obsidian bridge + pattern templates
 - `app/risk/` — position sizing, circuit breaker, risk manager
@@ -31,7 +31,7 @@
 - `config/` — YAML configuration (config.example.yaml, no config.yaml in repo)
 - `scripts/` — standalone scripts (ingest, calibration, vault setup, seed patterns)
 - `static/` — dark-theme SPA dashboard (vanilla JS)
-- `tests/` — mirrors app/ structure, 687+ tests
+- `tests/` — mirrors app/ structure, 870+ tests
 
 ## Project Structure (`.claude/`)
 - `.claude/tasks/todo.md` — canonical project task tracker (Phase 0-10)
@@ -56,7 +56,7 @@
 - Near-resolution positions (`mark_near_resolution()`) count at 50% for exposure calculations
 - Tick cycle sorts signals by priority score (`edge / days_to_resolution`) before execution
 
-## VAE Signals (9, weights sum to 1.0)
+## VAE Signals (11, nominal sum 1.10, effective ~1.00 w/ Manifold off — validator accepts [0.95, 1.15])
 | Signal | Weight | Source |
 |--------|--------|--------|
 | base_rate | 0.15 | ResolutionDB historical priors |
@@ -65,9 +65,11 @@
 | cross_market | 0.10 | Correlated Polymarket markets |
 | event_signal | 0.15 | GDELT + RSS intelligence |
 | pattern_kg | 0.10 | Obsidian KG patterns |
-| cross_platform | 0.10 | Manifold Markets divergence |
+| cross_platform | 0.10 | Manifold Markets divergence (0 when disabled) |
 | temporal | 0.05 | Time-to-resolution decay |
 | crowd_calibration | 0.05 | Historical crowd bias |
+| whale_pressure | 0.05 | Polymarket whale trades (event-style, indep. prob) |
+| insider_pressure | 0.05 | Pre-resolution suspicious trades (microstructure-style, ±0.05 on market_price) |
 
 ## Skills (9 project-specific)
 | Skill | Purpose |

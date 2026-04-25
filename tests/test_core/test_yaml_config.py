@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from app.core.yaml_config import (
     AppConfig,
+    WeightsConfig,
     _load_config,
     app_config,
     reload_config,
@@ -37,20 +38,46 @@ class TestAppConfigDefaults:
         assert cfg.risk.circuit_breaker.cooldown_minutes == 60
 
     def test_valuation_weights_sum(self) -> None:
+        """Weights sum must stay inside the permissive [0.95, 1.15] range.
+
+        Phase 13 S4b adds whale_pressure + insider_pressure (nominal sum 1.10)
+        so this test enumerates all numeric weight fields dynamically to stay
+        robust against future additions.
+        """
         cfg = AppConfig()
         w = cfg.valuation.weights
-        total = (
-            w.base_rate
-            + w.rule_analysis
-            + w.microstructure
-            + w.cross_market
-            + w.event_signal
-            + w.pattern_kg
-            + w.temporal
-            + w.crowd_calibration
-            + w.cross_platform
+        total = sum(
+            v for v in w.model_dump().values() if isinstance(v, int | float)
         )
-        assert abs(total - 1.0) < 1e-9
+        assert 0.95 <= total <= 1.15, f"sum={total}"
+
+    def test_valuation_weights_include_whale_and_insider(self) -> None:
+        w = WeightsConfig()
+        assert hasattr(w, "whale_pressure")
+        assert hasattr(w, "insider_pressure")
+        assert w.whale_pressure == 0.05
+        assert w.insider_pressure == 0.05
+
+    def test_valuation_weights_validator_rejects_out_of_range(self) -> None:
+        """Validator must reject an obviously unbalanced configuration."""
+        import pytest
+        from pydantic import ValidationError
+
+        # Crush every weight to 0 except one → sum ≈ 0.15 → below 0.95 → reject.
+        with pytest.raises(ValidationError):
+            WeightsConfig(
+                base_rate=0.15,
+                rule_analysis=0.0,
+                microstructure=0.0,
+                cross_market=0.0,
+                event_signal=0.0,
+                pattern_kg=0.0,
+                temporal=0.0,
+                crowd_calibration=0.0,
+                cross_platform=0.0,
+                whale_pressure=0.0,
+                insider_pressure=0.0,
+            )
 
     def test_strategies_defaults(self) -> None:
         cfg = AppConfig()
