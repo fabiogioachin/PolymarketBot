@@ -40,13 +40,17 @@ def _make_raw_trade(
     taker: str = "0xwhale",
     timestamp: str | None = None,
 ) -> dict[str, Any]:
+    # `size` here is USD-denominated (threshold-filter semantics). Slice 3 (N4)
+    # introduced explicit source-field branching: `size_usd` = already-USD,
+    # `size` = share-count requiring multiplication by price. These tests
+    # assert threshold filtering on USD values, so emit `size_usd` directly.
     return {
         "id": trade_id,
         "timestamp": timestamp or datetime.now(tz=UTC).isoformat(),
         "market": "m1",
         "taker": taker,
         "side": side,
-        "size": size,
+        "size_usd": size,
         "price": price,
     }
 

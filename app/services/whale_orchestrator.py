@@ -218,14 +218,21 @@ class WhaleOrchestrator:
             or ""
         )
         side = _normalize_side(raw.get("side"))
-        size_usd = _to_float(raw.get("size_usd") or raw.get("size"))
         price = _to_float(raw.get("price"))
-        # Guard: if size looks like share count (not USD) and price is present,
-        # derive USD notional. We keep `size` as already-USD if the source
-        # documents it that way — defensive only when price>0 and size<threshold
-        # but size*price>=threshold (shares reported instead of USD).
-        if size_usd and price and size_usd < 1.0:
-            size_usd = size_usd * price
+        # Explicit source branching to preserve provenance of the size value.
+        # `size_usd` (when present) is already-USD notional; `size` is share
+        # count and must be multiplied by price to obtain USD. If both keys
+        # are present, prefer `size_usd` — explicit USD tag trumps shares.
+        if raw.get("size_usd") is not None:
+            size_source = "usd"
+            size_value = _to_float(raw.get("size_usd"))
+        else:
+            size_source = "shares"
+            size_value = _to_float(raw.get("size"))
+        if size_source == "shares" and price:
+            usd_notional = size_value * price
+        else:
+            usd_notional = size_value
 
         is_pre_resolution = False
         if market.end_date is not None:
@@ -239,7 +246,7 @@ class WhaleOrchestrator:
             market_id=market.id,
             wallet_address=wallet,
             side=side,
-            size_usd=size_usd,
+            size_usd=usd_notional,
             price=price,
             is_pre_resolution=is_pre_resolution,
             raw_json=json.dumps(raw, default=str),
