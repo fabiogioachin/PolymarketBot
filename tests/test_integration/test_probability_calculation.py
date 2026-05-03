@@ -220,11 +220,10 @@ async def test_fair_value_with_all_signals_end_to_end(
 ) -> None:
     """End-to-end assess() with multiple signals -> BUY recommendation.
 
-    Seeds 70 YES + 30 NO resolutions so base_rate=0.70.
-    With 100 resolutions, shrinkage=0.50:
-      prior = 0.50 * 0.70 + 0.50 * 0.40 = 0.55
-    Then passes event_signal, rule_analysis_score, pattern_kg, cross_platform
-    directly through assess(). Verifies the full pipeline returns BUY/STRONG_BUY.
+    Seeds 70 YES + 30 NO resolutions so base_rate=0.70 (returned directly,
+    no market_price shrinkage — P1 fix 2026-04-27). With market_price=0.40
+    and additional bullish signals (event=0.70, rule=0.60, pattern=0.60,
+    cross_platform=0.50), the weighted average sits well above 0.40.
     """
     await _seed_resolutions(db, "politics", yes_count=70, no_count=30)
 
@@ -259,20 +258,16 @@ async def test_fair_value_with_all_signals_end_to_end(
 async def test_fair_value_with_partial_signals(
     engine: ValueAssessmentEngine,
 ) -> None:
-    """With only base_rate (DB empty -> uninformative prior), fair value is
-    computed without error and confidence is low.
+    """With an empty DB, ALL signals are correctly excluded — no anchoring.
 
-    With an empty DB:
-    - base_rate from get_base_rate = 0.5 (uninformative)
-    - resolution_count < 5 -> shrinkage = 0.10
-    - prior = 0.10 * 0.50 + 0.90 * 0.60 = 0.59
-    - crowd_calibration_adjustment = 0.0 (sample_size < 20)
-    - No other signals provided
+    P1 fix 2026-04-27: previously base_rate produced ``0.10*0.5 + 0.90*0.6 = 0.59``
+    (anchored to market_price), and the engine reported it as the only active
+    edge source. Now ``get_prior`` returns ``None`` when historical resolutions
+    are below ``min_base_rate_resolutions``, so the signal is excluded entirely.
 
-    Only 1 source active (base_rate). Confidence formula:
-      coverage = min(1.0, 0.5 + 1/6) = 0.6667
-      avg_confidence = 0.5 (base_rate confidence is always 0.5)
-      confidence = 0.5 * 0.6667 = 0.3333
+    With zero signals and no orderbook/universe data, the engine falls back to
+    ``fair_value = market_price`` via the ``weight_total == 0`` branch. The
+    result is honest: confidence=0.0 (we know nothing), edge=0.0 (no opinion).
     """
     market = _make_market(
         yes_price=0.60,
@@ -282,20 +277,17 @@ async def test_fair_value_with_partial_signals(
 
     result = await engine.assess(market)
 
-    # Should compute without exception
+    # Should compute without exception, fair_value defaults to market_price.
     assert result.fair_value is not None
-    assert result.fair_value > 0.0
+    assert result.fair_value == pytest.approx(0.60)
+    assert result.edge == pytest.approx(0.0, abs=0.001)
 
-    # Low confidence with only 1 signal source
-    assert result.confidence < 0.5, (
-        f"Expected low confidence with partial signals, got {result.confidence}"
-    )
+    # Zero confidence: no signals fired → engine knows nothing.
+    assert result.confidence == pytest.approx(0.0)
 
-    # Only 1 edge source should be present (base_rate from DB)
+    # Critically: no signals — no false anchoring.
     source_names = {s.name for s in result.edge_sources}
-    assert "base_rate" in source_names
-    # crowd_calibration NOT present (adj == 0.0 with empty DB)
-    assert "crowd_calibration" not in source_names
+    assert source_names == set(), f"Expected no signals, got {source_names}"
 
 
 # ── Test 3.3: Edge calculation symmetry ──────────────────────────────
@@ -310,12 +302,10 @@ async def test_edge_calculation_symmetry(
     Input A: market_price=0.30, strong YES signals -> edge > 0
     Input B: market_price=0.70, strong NO signals  -> edge < 0
 
-    Both use the same category with 60% YES rate (base_rate = 0.60).
-    With 100 resolutions, shrinkage = 0.50:
-      prior_A = 0.50 * 0.60 + 0.50 * 0.30 = 0.45
-      prior_B = 0.50 * 0.60 + 0.50 * 0.70 = 0.65
-
-    Adding event_signal to push the fair value clearly above/below market price.
+    Both use the same category with 60% YES rate (base_rate = 0.60). After the
+    P1 fix 2026-04-27 base_rate is returned directly (no market_price shrinkage),
+    so the prior is ``0.60`` for both markets and the event_signal/rule_score
+    push fair_value above 0.30 for A and below 0.70 for B.
     """
     await _seed_resolutions(db, "politics", yes_count=60, no_count=40)
 

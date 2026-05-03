@@ -37,6 +37,20 @@ class ExecutionConfig(BaseModel):
     shadow_mode: bool = False
 
 
+class BotConfig(BaseModel):
+    """Bot lifecycle configuration.
+
+    Controls automatic startup of the trading loop on backend boot. When
+    ``auto_start`` is True (default), ``app.main.lifespan`` calls
+    ``BotService.start(interval_seconds=tick_interval_seconds)`` after
+    logging is set up so ``ExecutionEngine.run`` begins ticking immediately.
+    Set to False to require an explicit ``POST /api/v1/bot/start`` call.
+    """
+
+    auto_start: bool = True
+    tick_interval_seconds: int = 60
+
+
 class CircuitBreakerConfig(BaseModel):
     consecutive_losses: int = 3
     daily_drawdown_pct: float = 15.0
@@ -129,11 +143,48 @@ class VolatilityConfig(BaseModel):
     min_observations: int = 3
 
 
+class GatingConfig(BaseModel):
+    """Signal gating thresholds (P1 fix 2026-04-27 — edge near-zero anchoring).
+
+    Signals that fall below these thresholds are excluded from the weighted
+    fair-value average instead of returning a value anchored to ``market_price``.
+    Anchored signals make ``fair_value`` collapse to ``market_price`` and produce
+    near-zero edge across the whole tick — they must NOT contribute when their
+    underlying data source is empty.
+    """
+
+    min_base_rate_resolutions: int = 5
+    """Minimum historical resolutions in a category before ``base_rate`` fires.
+
+    Below this, ``BaseRateAnalyzer.get_prior`` returns ``None`` (signal excluded).
+    Above this, the signal returns the historical rate directly — the engine's
+    weighted average blends it with the other active signals naturally.
+    """
+
+    require_cross_market_correlations: bool = True
+    """If true, exclude ``cross_market`` when no correlated markets are found.
+
+    ``CrossMarketAnalyzer.find_correlations`` returns ``composite_signal=0.0``
+    when no correlations match the keyword overlap threshold; the engine then
+    maps ``0.0`` to ``market_price + 0`` (anchored). With this flag, the engine
+    reads ``cross_signal=None`` instead and excludes the source.
+    """
+
+    require_microstructure_data: bool = True
+    """If true, exclude ``microstructure`` when both orderbook and history are empty.
+
+    A composite_score=0.0 from a feed with no bids/asks AND no price points
+    yields ``market_price - 0.05`` (mild anchoring). With this flag the engine
+    treats it as missing data and excludes the signal entirely.
+    """
+
+
 class ValuationConfig(BaseModel):
     tick_interval_seconds: int = 120
     weights: WeightsConfig = Field(default_factory=WeightsConfig)
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)
     volatility: VolatilityConfig = Field(default_factory=VolatilityConfig)
+    gating: GatingConfig = Field(default_factory=GatingConfig)
 
 
 class GdeltConfig(BaseModel):
@@ -221,6 +272,21 @@ class SubgraphConfig(BaseModel):
     enrichment_ttl_hours: int = 1
 
 
+class IntelligenceSchedulerConfig(BaseModel):
+    """Phase 13 Fix 4: independent intelligence ingest scheduler.
+
+    Drives whale / popular / leaderboard / snapshot orchestrators on their
+    own asyncio loops, decoupled from ``ExecutionEngine.tick`` so dashboards
+    stay fresh in monitoring-only mode.
+    """
+
+    enabled: bool = True
+    whale_interval_seconds: int = Field(default=60, ge=1)
+    popular_interval_seconds: int = Field(default=300, ge=1)
+    leaderboard_interval_seconds: int = Field(default=900, ge=1)
+    snapshot_interval_seconds: int = Field(default=300, ge=1)
+
+
 class IntelligenceConfig(BaseModel):
     gdelt: GdeltConfig = Field(default_factory=GdeltConfig)
     rss: RssConfig = Field(default_factory=RssConfig)
@@ -232,6 +298,9 @@ class IntelligenceConfig(BaseModel):
     )
     leaderboard: LeaderboardConfig = Field(default_factory=LeaderboardConfig)
     subgraph: SubgraphConfig = Field(default_factory=SubgraphConfig)
+    scheduler: IntelligenceSchedulerConfig = Field(
+        default_factory=IntelligenceSchedulerConfig
+    )
 
 
 class DssSnapshotWriterConfig(BaseModel):
@@ -306,6 +375,7 @@ class AppConfig(BaseModel):
     telegram: TelegramAlertConfig = Field(default_factory=TelegramAlertConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
     dss: DssConfig = Field(default_factory=DssConfig)
+    bot: BotConfig = Field(default_factory=BotConfig)
 
 
 # ── Loader ────────────────────────────────────────────────────────────

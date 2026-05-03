@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from app.core.yaml_config import (
     AppConfig,
+    BotConfig,
     WeightsConfig,
     _load_config,
     app_config,
@@ -142,3 +143,70 @@ class TestPartialYamlOverride:
         assert cfg.app.version == "0.1.0"  # default preserved
         assert cfg.risk.max_positions == 5
         assert cfg.risk.max_exposure_pct == 50.0  # default preserved
+
+
+class TestBotConfig:
+    """Phase 13 fix-1: bot.auto_start drives lifespan startup behavior."""
+
+    def test_default_auto_start_true(self) -> None:
+        cfg = AppConfig()
+        assert cfg.bot.auto_start is True
+        assert cfg.bot.tick_interval_seconds == 60
+
+    def test_bot_config_types(self) -> None:
+        b = BotConfig()
+        assert isinstance(b.auto_start, bool)
+        assert isinstance(b.tick_interval_seconds, int)
+
+    def test_bot_auto_start_override_false(self, tmp_path: Path) -> None:
+        yaml_content = textwrap.dedent("""\
+            bot:
+              auto_start: false
+              tick_interval_seconds: 30
+        """)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml_content, encoding="utf-8")
+
+        with patch("app.core.yaml_config._CONFIG_PATH", config_file):
+            cfg = _load_config()
+
+        assert cfg.bot.auto_start is False
+        assert cfg.bot.tick_interval_seconds == 30
+
+    def test_bot_section_in_example_yaml(self) -> None:
+        """Example YAML must declare bot.auto_start so it loads to True."""
+        cfg = _load_config()
+        assert cfg.bot.auto_start is True
+
+
+class TestIntelligenceSchedulerConfig:
+    """Phase 13 S4b — Team B: ``intelligence.scheduler.*`` YAML block.
+
+    The IntelligenceScheduler runs four independent asyncio loops (whale,
+    popular, leaderboard, snapshot). Their intervals must be configurable via
+    YAML under ``intelligence.scheduler``.
+    """
+
+    def test_yaml_config_loads_scheduler_block(self, tmp_path: Path) -> None:
+        """``intelligence.scheduler.whale_interval_seconds`` is read from YAML."""
+        yaml_content = textwrap.dedent("""\
+            intelligence:
+              scheduler:
+                enabled: true
+                whale_interval_seconds: 45
+                popular_interval_seconds: 200
+                leaderboard_interval_seconds: 800
+                snapshot_interval_seconds: 250
+        """)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml_content, encoding="utf-8")
+
+        with patch("app.core.yaml_config._CONFIG_PATH", config_file):
+            cfg = _load_config()
+
+        sched = cfg.intelligence.scheduler
+        assert sched.enabled is True
+        assert sched.whale_interval_seconds == 45
+        assert sched.popular_interval_seconds == 200
+        assert sched.leaderboard_interval_seconds == 800
+        assert sched.snapshot_interval_seconds == 250

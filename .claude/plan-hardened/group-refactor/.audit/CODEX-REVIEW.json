@@ -1,0 +1,188 @@
+{
+  "review_metadata": {
+    "reviewer": "codex",
+    "model": "gpt-5.5",
+    "round": 2,
+    "plan_file": ".claude/plan-hardened/group-refactor/PLAN.draft.md",
+    "generated_at": "2026-05-02",
+    "total_issues": 22
+  },
+  "issues": [
+    {
+      "id": "R2-01",
+      "severity": "BLOCKER",
+      "category": "unauthorized",
+      "location": "PR-J steps 1-5",
+      "description": "Plan modifies app/risk/manager.py, explicitly listed as unauthorized. Current RiskManager state and gates are in app/risk/manager.py:44, app/risk/manager.py:102, app/risk/manager.py:215, and app/risk/manager.py:234.",
+      "fix_proposed": "Remove PR-J from this plan or split it into a separately authorized risk plan. For this plan, prevent double-exposure inside app/execution/engine.py only, by enforcing one non-arbitrage signal per event before risk checks."
+    },
+    {
+      "id": "R2-02",
+      "severity": "MAJOR",
+      "category": "scope_creep",
+      "location": "PR-B step 4, PR-C step 3, PR-D step 2, PR-E step 2, PR-F step 2, PR-G step 2, PR-H step 2, PR-I step 2",
+      "description": "Plan repeatedly modifies app/core/dependencies.py to wrap and unwrap strategies, but allowed production scope excludes app/core/. Existing strategy registration lives in app/core/dependencies.py:218-243.",
+      "fix_proposed": "Either get explicit scope approval for app/core/dependencies.py, or keep wrapping inside app/strategies/registry.py without changing dependency wiring."
+    },
+    {
+      "id": "R2-03",
+      "severity": "MAJOR",
+      "category": "scope_creep",
+      "location": "PR-J step 3",
+      "description": "Plan modifies app/core/yaml_config.py and config/config.example.yaml for max_event_exposure_pct, but allowed scope excludes app/core/ and config/. Current risk config is app/core/yaml_config.py:71-85 and config/config.example.yaml:21-27.",
+      "fix_proposed": "Remove config changes from this plan. If event exposure is handled later, create a separate authorized risk/config plan."
+    },
+    {
+      "id": "R2-04",
+      "severity": "MAJOR",
+      "category": "scope_creep",
+      "location": "PR-A step 2 and Ambiguita A7",
+      "description": "Plan may create app/models/event.py, but maximal model scope only includes app/models/market.py. A7 leaves Event model placement undecided while PR-A tests depend on an Event return type.",
+      "fix_proposed": "Use a lightweight Event model in app/models/market.py or a private typed structure in app/clients/polymarket_rest.py, or explicitly request scope expansion for app/models/event.py before freeze."
+    },
+    {
+      "id": "R2-05",
+      "severity": "BLOCKER",
+      "category": "unauthorized",
+      "location": "PR-A steps 2-3 and PR-B step 5",
+      "description": "Plan identifies groups from Gamma /markets inline eventId/events fields and only later falls back to /events. Fixed constraint says group identification must be ONLY via Polymarket Gamma /events API. Current _parse_market only parses market payload fields at app/clients/polymarket_rest.py:54-137.",
+      "fix_proposed": "Do not use /markets inline eventId/events for grouping. Populate group event_id only from records returned by GET /events or GET /events/{id}; direct inline fields may be logged for diagnostics but must not drive grouping."
+    },
+    {
+      "id": "R2-06",
+      "severity": "BLOCKER",
+      "category": "edge_case",
+      "location": "PR-B step 5",
+      "description": "If /events is empty, stale, rate-limited, or returns 503 after retries, PR-B silently puts markets with event_id == \"\" into singleton groups. That can trade multiple markets from the same event and defeats the objective. Retry behavior exists in app/clients/polymarket_rest.py:250-304, but the plan has no fail-closed grouping policy.",
+      "fix_proposed": "Distinguish true standalone markets from grouping-unknown markets. When /events lookup fails or is inconsistent, mark grouping_incomplete and skip trading those markets for the tick, with tests for 429, 503, empty events, and missing condition_id joins."
+    },
+    {
+      "id": "R2-07",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "location": "PR-A step 2 and PR-B step 5",
+      "description": "list_events(active=True, limit=100, offset=0) has no pagination loop. Active Polymarket events can exceed 100, so joins by condition_id can miss later events and degrade to singleton groups.",
+      "fix_proposed": "Specify offset pagination until a page returns fewer than limit, with a hard page cap and logging. Add tests where the needed event appears after offset 100."
+    },
+    {
+      "id": "R2-08",
+      "severity": "MAJOR",
+      "category": "ambiguous",
+      "location": "PR-A step 2",
+      "description": "Event parsing and market join keys are underspecified: eventId, event, events, id, conditionId, and nested markets may conflict. Current Market has both id and condition_id at app/models/market.py:67-69, and _parse_market maps conditionId at app/clients/polymarket_rest.py:131.",
+      "fix_proposed": "Freeze an explicit schema contract: direct event.id, event.slug, nested markets[*].id, markets[*].conditionId. Define conflict precedence, log inconsistent mappings, and skip ambiguous joins instead of guessing."
+    },
+    {
+      "id": "R2-09",
+      "severity": "BLOCKER",
+      "category": "ambiguous",
+      "location": "PR-B step 6",
+      "description": "Engine refactor calls self._market_service.group_by_event(markets, valuations) or maybe get_grouped_markets, but MarketService currently has no group_by_event and MarketScanner also has no group_by_event. Existing flat fetch is app/execution/engine.py:122 and app/services/market_service.py:76-100.",
+      "fix_proposed": "Define one concrete API before implementation: either MarketService.get_grouped_markets returns groups and engine flattens for valuation, or app/services/market_scanner.py exposes group_by_event(markets). Remove the 'oppure' branch."
+    },
+    {
+      "id": "R2-10",
+      "severity": "BLOCKER",
+      "category": "edge_case",
+      "location": "Ambiguita A5 and PR-B step 6",
+      "description": "A5 proposes top_K=20 for large events, but no PR step applies the cap before VAE assessment. The engine assesses all markets before signal grouping at app/execution/engine.py:180-184, so N>50 events still incur full valuation cost.",
+      "fix_proposed": "Group and cap before assess_batch, then pass only selected markets to VAE. Add tests for an event with more than 50 markets proving only top_K by volume_24h/id are assessed."
+    },
+    {
+      "id": "R2-11",
+      "severity": "BLOCKER",
+      "category": "edge_case",
+      "location": "PR-B step 6 and PR-C through PR-I",
+      "description": "Plan makes each strategy choose one winner per group, but engine still iterates all applicable strategies and appends every strategy output. Current engine loops strategies at app/execution/engine.py:222-245. This can produce multiple non-arbitrage trades on the same event_id in one tick.",
+      "fix_proposed": "Add an engine-level final arbiter: after collecting strategy outputs, group non-arbitrage signals by event_id and keep one winner by deterministic priority score. Allow arbitrage list[Signal] only for its own exception."
+    },
+    {
+      "id": "R2-12",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "location": "PR-B step 2 and Ambiguita A9",
+      "description": "LegacyStrategyAdapter returns the first non-None signal. That is not behavior-preserving versus the current per-market loop, and it can select a lower-edge market purely because it appears first. The current engine previously generated every per-market signal at app/execution/engine.py:213-245 and sorted later.",
+      "fix_proposed": "Have the adapter evaluate all markets with valuations, then deterministically pick the best signal using the same priority formula as app/execution/engine.py:250-263 or a documented edge/confidence score. Test ties by market id."
+    },
+    {
+      "id": "R2-13",
+      "severity": "BLOCKER",
+      "category": "edge_case",
+      "location": "PR-B steps 2-4 and PR-I",
+      "description": "PR-B wraps all 7 strategies, including arbitrage, with an adapter that returns the first non-None result. Arbitrage currently returns two-leg lists from app/strategies/arbitrage.py:94-114 and app/strategies/arbitrage.py:136-156. Wrapped arbitrage would stop after the first mispriced market in a group, violating the fixed arbitrage exception.",
+      "fix_proposed": "Do not use first-non-None adapter for arbitrage. Migrate arbitrage in PR-B or create a special legacy adapter that aggregates list[Signal] outputs across all markets."
+    },
+    {
+      "id": "R2-14",
+      "severity": "MAJOR",
+      "category": "ambiguous",
+      "location": "PR-F step 4, PR-G, PR-H, Ambiguita A4 and A10",
+      "description": "KnowledgeContext source remains unresolved while PR-F/G/H require it. Current engine only injects external_signals into VAE at app/execution/engine.py:148-181; strategies receive no knowledge at app/execution/engine.py:225. A4 offers incompatible options, including changing the Protocol, after the fixed signature is already set.",
+      "fix_proposed": "Before PR-F, choose one concrete source compatible with the fixed signature, e.g. knowledge from the most-liquid market in the group, and add tests for missing, stale, and mixed knowledge contexts."
+    },
+    {
+      "id": "R2-15",
+      "severity": "BLOCKER",
+      "category": "ambiguous",
+      "location": "Out of scope SELL->BUY-NO note and Assunzione 6",
+      "description": "Plan assumes the SELL->BUY-NO hotfix is already merged, but spot-check shows app/strategies/sentiment.py still returns SignalType.SELL for bearish aligned signals at app/strategies/sentiment.py:143. Because the hotfix is out of scope, PR-F could either ship the known bug or drift into unauthorized hotfix work.",
+      "fix_proposed": "Add a blocking preflight before PR-A: verify sentiment, event_driven, and knowledge_driven no longer emit strategy SELL for entry signals. If not true, stop and merge the separate hotfix first."
+    },
+    {
+      "id": "R2-16",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "location": "PR-J steps 1-2",
+      "description": "Event exposure tracking is incomplete across close and restart. Current record_fill only knows token_id and size at app/risk/manager.py:215-233, record_close only knows token_id at app/risk/manager.py:234-243, and restore_from_store replays fills without event_id at app/execution/engine.py:742-759.",
+      "fix_proposed": "If PR-J is split into an authorized plan, track token_id -> event_id and token_id -> exposure, persist event_id with positions/trades, and restore event exposure on startup."
+    },
+    {
+      "id": "R2-17",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "location": "PR-J step 1",
+      "description": "check_order and record_fill remain separate operations, so concurrent tick invocations or parallel order paths can both pass an event cap before either records exposure. Current check is app/risk/manager.py:102-190 and fill is app/risk/manager.py:215-233.",
+      "fix_proposed": "Use an atomic reserve-and-record path guarded by an asyncio.Lock, or add an ExecutionEngine tick lock preventing concurrent ticks. Include a concurrency test that two same-event orders cannot both reserve over the cap."
+    },
+    {
+      "id": "R2-18",
+      "severity": "MAJOR",
+      "category": "ambiguous",
+      "location": "Ambiguita A2 and A12",
+      "description": "Mixed-category events are left unresolved. Splitting one event by category can produce multiple winners for the same event_id, directly conflicting with the fixed one-signal-per-group constraint. Registry domain filtering currently happens per domain at app/strategies/registry.py:30-42.",
+      "fix_proposed": "Freeze a deterministic policy: either fail closed for mixed-category events or perform category-specific strategy evaluation followed by one event-level final winner across all subgroups."
+    },
+    {
+      "id": "R2-19",
+      "severity": "MAJOR",
+      "category": "ambiguous",
+      "location": "PR-D, PR-E, PR-F, PR-G, PR-H, PR-I test steps",
+      "description": "Several migrated strategy test steps say 'analogo' or just 'Verifica' without concrete singleton regression cases. The prompt explicitly calls out migrated strategies without singleton-group regression as a risk. Existing strategy tests still call evaluate(market, valuation), e.g. tests/test_strategies/test_value_edge.py:60 and tests/test_strategies/test_rule_edge.py:95.",
+      "fix_proposed": "For every migrated strategy, list exact tests: singleton unchanged behavior, N>1 winner, all filtered -> None, tie by input order/id, missing valuation skipped, and legacy signature removed."
+    },
+    {
+      "id": "R2-20",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "location": "PR-A step 3, PR-B step 5, Ambiguita A1",
+      "description": "Cache invalidation for event_id is unresolved. MarketService caches filtered Market objects at app/services/market_service.py:21-34 and app/services/market_service.py:47-72. If event membership is stale or an earlier cache entry has event_id == \"\", the plan does not define when to refresh events or invalidate market cache.",
+      "fix_proposed": "Use separate event cache TTL plus a grouping_version timestamp. When event cache refreshes, rebuild grouped market objects; never reuse cached event_id == \"\" after a successful /events refresh. Test stale empty event_id cache recovery."
+    },
+    {
+      "id": "R2-21",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "location": "PR-B step 6",
+      "description": "Engine result handling trusts returned signal.market_id. With the proposed group-level call, a buggy or legacy strategy can return a signal for a market outside the current group; the plan says to lookup mkt by signal.market_id but does not validate membership. Current code appends the loop market regardless of signal.market_id at app/execution/engine.py:245.",
+      "fix_proposed": "Before appending a signal, require sig.market_id in the current group and in valuations_subset. Drop and log invalid_strategy_signal otherwise. Add a test with a mock strategy returning an out-of-group market_id."
+    },
+    {
+      "id": "R2-22",
+      "severity": "MINOR",
+      "category": "scope_creep",
+      "location": "Done conditions",
+      "description": "Done conditions require Lessons.md to be updated, but .claude/tasks/lessons.md is outside the allowed implementation scope and unrelated to the group refactor.",
+      "fix_proposed": "Remove Lessons.md from done conditions or move it to a separate documentation task with explicit approval."
+    }
+  ]
+}

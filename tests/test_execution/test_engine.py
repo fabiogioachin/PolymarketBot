@@ -356,6 +356,115 @@ class TestFullTick:
         assert any("execute" in e for e in result.errors)
 
 
+class _PositionHoldingExecutor(FakeExecutor):
+    """Executor that reports a configurable list of open positions.
+
+    Used to simulate state carried across ticks: when get_positions() returns
+    a non-empty list, the engine must dedup BUY signals on those token_ids.
+    """
+
+    def __init__(self, positions: list[Position], balance: float = 150.0) -> None:
+        super().__init__(balance=balance)
+        self._held: list[Position] = positions
+
+    async def get_positions(self) -> list[Position]:
+        return list(self._held)
+
+
+class TestDuplicatePositionDedup:
+    """Regression: BUG-1 — identical consecutive bets across ticks.
+
+    Without the dedup guard, a strategy emits a BUY signal every tick and the
+    engine routes it through the executor, merging into the existing position
+    via weighted-average price (avg_price drift) and surfacing as duplicate
+    "open" entries in the trade log on consecutive ticks.
+
+    Fix: engine.tick() captures token_ids of currently-open positions after
+    exit-management and drops BUY signals targeting any held token.
+    """
+
+    @pytest.mark.asyncio
+    async def test_buy_signal_dropped_when_position_already_open(self) -> None:
+        # Simulate state from a previous tick: position open on tok-1
+        executor = _PositionHoldingExecutor(
+            positions=[
+                Position(
+                    market_id="mkt-1",
+                    token_id="tok-1",
+                    side=OrderSide.BUY,
+                    size=10.0,
+                    avg_price=0.50,
+                    current_price=0.50,
+                )
+            ]
+        )
+        engine = _make_engine(executor=executor)
+        market = _make_market()  # FakeStrategy emits BUY on tok-1
+
+        result = await engine.tick(markets=[market])
+
+        assert result.signals_generated == 0
+        assert result.orders_placed == 0
+        assert len(executor._orders) == 0
+
+    @pytest.mark.asyncio
+    async def test_buy_signal_passes_when_no_position_open(self) -> None:
+        # Sanity: no open positions → BUY proceeds normally
+        executor = _PositionHoldingExecutor(positions=[])
+        engine = _make_engine(executor=executor)
+        market = _make_market()
+
+        result = await engine.tick(markets=[market])
+
+        assert result.signals_generated == 1
+        assert result.orders_placed == 1
+
+    @pytest.mark.asyncio
+    async def test_dedup_is_per_token_not_per_market(self) -> None:
+        # Holding a different token_id on the same market must not block
+        # a BUY on a fresh outcome (precise dedup, not coarse over-blocking).
+        executor = _PositionHoldingExecutor(
+            positions=[
+                Position(
+                    market_id="mkt-1",
+                    token_id="other-token",
+                    side=OrderSide.BUY,
+                    size=10.0,
+                    avg_price=0.50,
+                )
+            ]
+        )
+        engine = _make_engine(executor=executor)
+        market = _make_market()  # FakeStrategy emits BUY on tok-1
+
+        result = await engine.tick(markets=[market])
+
+        assert result.signals_generated == 1
+        assert result.orders_placed == 1
+
+    @pytest.mark.asyncio
+    async def test_dust_position_does_not_block(self) -> None:
+        # Effectively-closed position (size < 0.001) must not block new BUYs
+        executor = _PositionHoldingExecutor(
+            positions=[
+                Position(
+                    market_id="mkt-1",
+                    token_id="tok-1",
+                    side=OrderSide.BUY,
+                    size=0.0005,
+                    avg_price=0.50,
+                )
+            ]
+        )
+        engine = _make_engine(executor=executor)
+        market = _make_market()
+
+        result = await engine.tick(markets=[market])
+
+        assert result.signals_generated == 1
+        assert result.orders_placed == 1
+
+
 class TestTradeLog:
     @pytest.mark.asyncio
     async def test_trade_log_populated_after_fill(self) -> None:
@@ -820,7 +929,14 @@ class TestPartialExitFill:
 
     @pytest.mark.asyncio
     async def test_partial_exit_does_not_block_reevaluation(self) -> None:
-        """A partial exit should NOT add market to exited_market_ids."""
+        """A partial exit should NOT add market to exited_market_ids.
+
+        We hold a position on tok-1 (partially exited this tick) and have a
+        strategy emit on tok-fresh in the same market. If exited_market_ids
+        had been over-populated by the partial exit, no signal would be
+        generated. The dedup guard (BUG-1) is per-token, so a BUY on a
+        different token in the same market correctly passes through.
+        """
         pos = Position(
             market_id="mkt-1",
             token_id="tok-1",
@@ -833,8 +949,29 @@ class TestPartialExitFill:
         executor = PositionAwareExecutor(
             positions=[pos], sell_fill_fraction=0.5
         )
-        # Use a strategy that generates BUY signals to check exited_market_ids
-        registry = _make_registry()
+
+        # Reuse FakeStrategy's enabled name but override evaluate to emit on
+        # a fresh token (tok-fresh) so dedup doesn't block this test path.
+        class FreshTokenStrategy(FakeStrategy):
+            async def evaluate(  # type: ignore[override]
+                self,
+                market: Market,
+                valuation: ValuationResult,
+                knowledge: object = None,
+            ) -> Signal:
+                return Signal(
+                    strategy=self.name,
+                    market_id=market.id,
+                    token_id="tok-fresh",
+                    signal_type=SignalType.BUY,
+                    confidence=0.8,
+                    market_price=valuation.market_price,
+                    edge_amount=0.10,
+                    reasoning="Same-market different-outcome BUY",
+                )
+
+        registry = StrategyRegistry()
+        registry.register(FreshTokenStrategy())  # type: ignore[arg-type]
 
         class ExitValuation:
             async def assess_batch(
@@ -866,8 +1003,8 @@ class TestPartialExitFill:
         market = _make_market()
         result = await engine.tick(markets=[market])
 
-        # Partial exit: market should NOT be in exited_market_ids
-        # so strategies can still generate signals (signals_generated > 0)
+        # Partial exit on tok-1 must not block strategies from generating
+        # signals on a different outcome (tok-fresh) in the same market.
         assert result.signals_generated > 0
 
 

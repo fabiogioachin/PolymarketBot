@@ -148,14 +148,26 @@ async def test_s1_invariant_preserved_with_whale_signal(
 async def test_insider_pressure_signal_is_dampened(
     engine: ValueAssessmentEngine,
 ) -> None:
-    """Insider signal must nudge fair value only slightly (±0.05 max scale)."""
+    """Insider signal must nudge fair value only slightly (±0.05 max scale).
+
+    The insider mapping ``market_price + (signal - 0.5) * 0.1`` clamps the
+    nudge at ±0.05 (signal in [0, 1]). With insider as the only firing
+    signal, the impact on fair_value is exactly that nudge.
+
+    Pre-P1-fix this delta was much smaller (~0.02) because base_rate also
+    fired with a value anchored to market_price, dampening any other
+    signal's contribution. The new gating excludes base_rate under sparse
+    data, so the true insider scale is now visible.
+    """
     market = _make_market(yes_price=0.50)
     neutral = await engine.assess_batch([market])
     amplified = await engine.assess_batch(
         [market],
         external_signals={market.id: {"insider_pressure": 0.9}},
     )
-    # Insider signal 0.9 adds +0.04 to market_price (0.5 → 0.54 nudge)
-    # weighted by 0.05 — overall impact on fair_value must be small.
+    # Insider signal 0.9 → market_price + (0.9 - 0.5) * 0.1 = 0.54.
+    # Insider is the only firing signal here, so fair_value = 0.54 exactly,
+    # delta = 0.04 — bounded by the formula's ±0.05 cap.
     delta = abs(amplified[0].fair_value - neutral[0].fair_value)
-    assert delta < 0.03
+    assert delta == pytest.approx(0.04, abs=1e-6)
+    assert delta <= 0.05  # within the documented ±0.05 cap

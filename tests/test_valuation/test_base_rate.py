@@ -135,8 +135,30 @@ async def test_base_rate_multiple_categories(db: ResolutionDB):
     assert rates["sports"] == pytest.approx(0.3)
 
 
-async def test_get_prior_weak_prior(db: ResolutionDB):
-    """With 5 samples (< 20), shrinkage=0.20: mostly trusts market price."""
+async def test_get_prior_returns_none_below_threshold(db: ResolutionDB):
+    """P1 fix 2026-04-27: with sparse data the signal is excluded (None).
+
+    Below ``valuation.gating.min_base_rate_resolutions`` (default 5) the
+    historical rate is too noisy to trust — returning ``None`` keeps the
+    engine from anchoring ``fair_value`` to ``market_price``.
+    """
+    # 4 resolutions only — below the default threshold of 5.
+    for i in range(4):
+        await db.add_resolution(_make_resolution(f"m{i}", "politics", True))
+
+    analyzer = BaseRateAnalyzer(db)
+    market = _make_market(category=MarketCategory.POLITICS, yes_price=0.6)
+    prior = await analyzer.get_prior(market)
+    assert prior is None
+
+
+async def test_get_prior_returns_historical_rate_at_threshold(db: ResolutionDB):
+    """At the threshold (default 5), the signal returns the raw historical rate.
+
+    No more market_price blending — the weighted average inside the engine is
+    what mixes signals together, and baking market_price into a single signal
+    silently anchors fair_value (the original BUG).
+    """
     # 5 resolutions, all YES -> base_rate = 1.0
     for i in range(5):
         await db.add_resolution(_make_resolution(f"m{i}", "politics", True))
@@ -144,12 +166,12 @@ async def test_get_prior_weak_prior(db: ResolutionDB):
     analyzer = BaseRateAnalyzer(db)
     market = _make_market(category=MarketCategory.POLITICS, yes_price=0.6)
     prior = await analyzer.get_prior(market)
-    # shrinkage=0.20: 0.20 * 1.0 + 0.80 * 0.6 = 0.20 + 0.48 = 0.68
-    assert prior == pytest.approx(0.68)
+    # No shrinkage to market_price — pure historical rate
+    assert prior == pytest.approx(1.0)
 
 
-async def test_get_prior_strong_prior(db: ResolutionDB):
-    """With 50+ samples, shrinkage=0.50: equal weight base rate and market."""
+async def test_get_prior_returns_historical_rate_with_strong_evidence(db: ResolutionDB):
+    """With 50+ samples the historical rate is returned directly (no blending)."""
     # 50 resolutions, 40 YES -> base_rate = 0.8
     for i in range(40):
         await db.add_resolution(_make_resolution(f"y{i}", "politics", True))
@@ -159,8 +181,30 @@ async def test_get_prior_strong_prior(db: ResolutionDB):
     analyzer = BaseRateAnalyzer(db)
     market = _make_market(category=MarketCategory.POLITICS, yes_price=0.6)
     prior = await analyzer.get_prior(market)
-    # shrinkage=0.50: 0.50 * 0.8 + 0.50 * 0.6 = 0.40 + 0.30 = 0.70
-    assert prior == pytest.approx(0.70)
+    # No shrinkage — historical rate alone
+    assert prior == pytest.approx(0.8)
+
+
+async def test_get_prior_independent_of_market_price(db: ResolutionDB):
+    """The prior MUST be independent of market_price.
+
+    Regression for the anchoring bug: previously ``get_prior`` returned a
+    Bayesian blend of historical rate and market_price, which made the signal
+    output ≈ market_price under sparse data → edge collapsed across the whole
+    weighted average.
+    """
+    for i in range(40):
+        await db.add_resolution(_make_resolution(f"y{i}", "politics", True))
+    for i in range(10):
+        await db.add_resolution(_make_resolution(f"n{i}", "politics", False))
+
+    analyzer = BaseRateAnalyzer(db)
+    market_low = _make_market(category=MarketCategory.POLITICS, yes_price=0.20)
+    market_high = _make_market(category=MarketCategory.POLITICS, yes_price=0.80)
+    prior_low = await analyzer.get_prior(market_low)
+    prior_high = await analyzer.get_prior(market_high)
+    assert prior_low == prior_high  # signal independent of market_price
+    assert prior_low == pytest.approx(0.8)
 
 
 async def test_compute_caches_rates(db: ResolutionDB):

@@ -39,6 +39,7 @@ class ValueAssessmentEngine:
         self._weights = app_config.valuation.weights
         self._thresholds = app_config.valuation.thresholds
         self._volatility = app_config.valuation.volatility
+        self._gating = app_config.valuation.gating
 
     async def assess(
         self,
@@ -71,16 +72,22 @@ class ValueAssessmentEngine:
         # 2. Crowd calibration adjustment
         calibration_adj = await self._calibration.get_adjustment(market.category.value)
 
-        # 3. Microstructure (if data provided)
+        # 3. Microstructure (if data provided AND non-empty — P1 fix 2026-04-27).
+        # An OrderBook with no bids/asks and a PriceHistory with no points yield
+        # composite_score=0.0, which the engine maps to ``market_price - 0.05``
+        # (anchored). Skip the signal entirely when both feeds are vacuous.
         micro_score: float | None = None
-        if orderbook_data is not None or price_history is not None:
+        if self._has_microstructure_data(orderbook_data, price_history):
             micro_score = self._analyze_microstructure(orderbook_data, price_history)
 
-        # 4. Cross-market (if universe provided)
+        # 4. Cross-market (P1 fix 2026-04-27): only fire when at least one
+        # correlated market is found. Otherwise ``composite_signal=0.0`` maps
+        # to ``market_price + 0`` and silently anchors fair_value.
         cross_signal: float | None = None
         if universe:
             cross_analysis = self._cross_market.find_correlations(market, universe)
-            cross_signal = cross_analysis.composite_signal
+            if cross_analysis.correlations or not self._gating.require_cross_market_correlations:
+                cross_signal = cross_analysis.composite_signal
 
         # 5. Temporal factor
         temporal_factor = self._temporal.compute_temporal_factor(market)
@@ -523,6 +530,23 @@ class ValueAssessmentEngine:
             if outcome.outcome.lower() == "yes":
                 return outcome.price
         return 0.5  # default if no YES outcome found
+
+    def _has_microstructure_data(
+        self, orderbook: OrderBook | None, history: PriceHistory | None
+    ) -> bool:
+        """Return True when at least one feed carries actionable data.
+
+        Used to gate the microstructure signal: when both the orderbook and
+        the price history are empty (bids/asks AND points all missing), the
+        composite score collapses to 0.0 and anchors ``fair_value`` to
+        ``market_price - 0.05``. Better to exclude the signal entirely.
+        """
+        if not self._gating.require_microstructure_data:
+            # Legacy behavior: fire whenever any object is provided.
+            return orderbook is not None or history is not None
+        has_ob = isinstance(orderbook, OrderBook) and bool(orderbook.bids or orderbook.asks)
+        has_hist = isinstance(history, PriceHistory) and bool(history.points)
+        return has_ob or has_hist
 
     def _analyze_microstructure(
         self, orderbook: OrderBook | None, history: PriceHistory | None

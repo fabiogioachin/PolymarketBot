@@ -64,7 +64,12 @@ class PolymarketWsClient:
         logger.info("ws_unsubscribed", asset_ids=asset_ids)
 
     async def listen(self) -> AsyncIterator[dict[str, Any]]:
-        """Yield parsed messages from WebSocket. Handles heartbeat internally."""
+        """Yield parsed messages from WebSocket. Handles heartbeat internally.
+
+        Polymarket WS sends both single events (dict) and batches (list of dicts).
+        This method normalizes both into a stream of dict events, dropping pong
+        replies and logging unexpected payload shapes without crashing the loop.
+        """
         while self._connected:
             try:
                 if not self._ws:
@@ -73,21 +78,37 @@ class PolymarketWsClient:
                 raw = await self._ws.recv()
                 data = json.loads(raw)
 
-                # Skip pong responses (handled by heartbeat)
-                if data.get("type") == "pong":
-                    continue
-
-                yield data
-
             except ConnectionClosed:
                 logger.warning("ws_connection_closed")
                 self._connected = False
                 await self._attempt_reconnect()
+                continue
 
             except Exception:
                 logger.exception("ws_listen_error")
                 self._connected = False
                 await self._attempt_reconnect()
+                continue
+
+            # Normalize single event vs batch into a list of candidates.
+            if isinstance(data, list):
+                events: list[Any] = data
+            else:
+                events = [data]
+
+            for event in events:
+                if not isinstance(event, dict):
+                    logger.warning(
+                        "ws_unexpected_payload_type",
+                        type=type(event).__name__,
+                    )
+                    continue
+
+                # Skip pong responses (handled by heartbeat)
+                if event.get("type") == "pong":
+                    continue
+
+                yield event
 
     async def disconnect(self) -> None:
         """Gracefully disconnect."""

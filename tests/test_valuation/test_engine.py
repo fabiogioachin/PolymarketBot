@@ -98,28 +98,36 @@ async def _seed_resolutions(
 
 
 async def test_assess_no_signals(engine: ValueAssessmentEngine):
-    """With no extra signals, fair value should be close to market price -> HOLD."""
+    """With empty DB and no external signals, ALL signals are correctly excluded.
+
+    P1 fix 2026-04-27: base_rate now returns ``None`` below the historical
+    threshold instead of a value anchored to ``market_price``. With nothing
+    to fire, the engine falls back to ``fair_value = market_price``.
+    """
     market = _make_market(yes_price=0.5)
     result = await engine.assess(market)
 
     assert result.market_id == "m1"
-    # With only base_rate (0.5 uninformative prior), fair value ~ market price
-    assert abs(result.fair_value - 0.5) < 0.05
+    assert result.fair_value == pytest.approx(0.5)
+    assert result.edge == pytest.approx(0.0, abs=0.001)
     assert result.recommendation == Recommendation.HOLD
 
 
 async def test_assess_with_base_rate(db: ResolutionDB, engine: ValueAssessmentEngine):
-    """Historical resolutions shift the base rate, which shifts fair value."""
+    """Historical resolutions shift the base rate, which shifts fair value.
+
+    P1 fix 2026-04-27: base_rate is now returned directly (no market_price
+    blending) once the resolution count crosses the gating threshold.
+    """
     # 80% YES resolution rate in politics
     await _seed_resolutions(db, "politics", yes_count=40, no_count=10)
 
     market = _make_market(yes_price=0.5, category=MarketCategory.POLITICS)
     result = await engine.assess(market)
 
-    # Base rate = 0.8, prior will shrink toward market price but still > 0.5
-    # So fair_value should be > market_price
-    assert result.fair_value > 0.5
-    assert result.edge > 0
+    # base_rate=0.8 is the only firing signal → fair_value=0.8 directly
+    assert result.fair_value == pytest.approx(0.8)
+    assert result.edge == pytest.approx(0.3, abs=0.001)
 
 
 async def test_assess_with_positive_edge(db: ResolutionDB, engine: ValueAssessmentEngine):
@@ -178,17 +186,17 @@ async def test_assess_strong_buy(db: ResolutionDB, engine: ValueAssessmentEngine
     assert result.recommendation == Recommendation.STRONG_BUY
 
 
-async def test_assess_single_source_moderate_confidence(engine: ValueAssessmentEngine):
-    """With only base_rate signal, confidence should be moderate but edge ≈ 0 → HOLD."""
-    # With no historical data and only base_rate signal, confidence is moderate
-    # but edge is zero (fair_value ≈ market_price), so recommendation is HOLD.
+async def test_assess_no_sources_zero_confidence(engine: ValueAssessmentEngine):
+    """With empty DB and no inputs, confidence must be exactly 0.0 (no opinion).
+
+    P1 fix 2026-04-27: base_rate no longer anchors with a fake 0.5 prior under
+    sparse data — it returns ``None``. Zero sources → zero confidence → HOLD.
+    """
     market = _make_market(yes_price=0.5)
     result = await engine.assess(market)
 
-    # 1 source: coverage = 0.5 + 1/6 ≈ 0.67, confidence = 0.5 * 0.67 ≈ 0.33
-    assert result.confidence < 0.5
-    # Edge ≈ 0 because base_rate ≈ market_price → HOLD regardless of confidence
-    assert abs(result.edge) < 0.05
+    assert result.confidence == pytest.approx(0.0)
+    assert result.edge == pytest.approx(0.0, abs=0.001)
     assert result.recommendation == Recommendation.HOLD
 
 
@@ -487,3 +495,124 @@ async def test_recommend_buy_sell_thresholds(engine: ValueAssessmentEngine):
     assert engine._recommend(-0.16, 0.5) == Recommendation.STRONG_SELL
     # Low confidence always HOLD
     assert engine._recommend(0.20, 0.1) == Recommendation.HOLD
+
+
+# ── P1 fix 2026-04-27: signal gating regression tests ─────────────────
+#
+# Regression for "Edge near-zero in practice": when a signal's underlying data
+# source is empty, returning a value indistinguishable from ``market_price``
+# silently drags ``fair_value`` toward ``market_price`` and collapses the edge
+# across all other signals. These tests pin the new behavior: empty data →
+# signal excluded → no anchoring.
+
+
+async def test_gating_base_rate_excluded_with_empty_db(
+    engine: ValueAssessmentEngine,
+) -> None:
+    market = _make_market(yes_price=0.6)
+    result = await engine.assess(market)
+
+    source_names = {s.name for s in result.edge_sources}
+    assert "base_rate" not in source_names
+    # No signals at all → fair_value falls back to market_price
+    assert result.fair_value == pytest.approx(0.6)
+
+
+async def test_gating_base_rate_excluded_just_below_threshold(
+    db: ResolutionDB, engine: ValueAssessmentEngine
+) -> None:
+    # Default threshold is 5; seed only 4 → still excluded.
+    await _seed_resolutions(db, "politics", yes_count=4, no_count=0)
+
+    market = _make_market(yes_price=0.6, category=MarketCategory.POLITICS)
+    result = await engine.assess(market)
+
+    source_names = {s.name for s in result.edge_sources}
+    assert "base_rate" not in source_names
+
+
+async def test_gating_base_rate_fires_at_threshold_returns_raw_rate(
+    db: ResolutionDB, engine: ValueAssessmentEngine
+) -> None:
+    # Exactly threshold (5) — signal fires with the raw historical rate.
+    await _seed_resolutions(db, "politics", yes_count=4, no_count=1)
+
+    market = _make_market(yes_price=0.30, category=MarketCategory.POLITICS)
+    result = await engine.assess(market)
+
+    # base_rate=0.8 is the only firing signal → fair_value=0.8 directly,
+    # NOT a market_price-anchored shrinkage like 0.10*0.8 + 0.90*0.30 = 0.35.
+    assert result.fair_value == pytest.approx(0.8)
+    assert "base_rate" in {s.name for s in result.edge_sources}
+
+
+async def test_gating_cross_market_excluded_when_no_correlations(
+    engine: ValueAssessmentEngine,
+) -> None:
+    target = _make_market(market_id="t", yes_price=0.6, question="Will solar flare hit Earth?")
+    unrelated = _make_market(
+        market_id="u",
+        yes_price=0.5,
+        question="Will inflation drop below 2%?",
+    )
+    result = await engine.assess(target, universe=[target, unrelated])
+
+    source_names = {s.name for s in result.edge_sources}
+    assert "cross_market" not in source_names
+
+
+async def test_gating_microstructure_excluded_when_orderbook_empty(
+    engine: ValueAssessmentEngine,
+) -> None:
+    market = _make_market(yes_price=0.6)
+    empty_ob = OrderBook(
+        market_id="m1",
+        asset_id="t1",
+        bids=[],
+        asks=[],
+        spread=0.0,
+        midpoint=0.0,
+    )
+    result = await engine.assess(market, orderbook_data=empty_ob)
+
+    source_names = {s.name for s in result.edge_sources}
+    assert "microstructure" not in source_names
+
+
+async def test_gating_no_signals_produces_market_price_exactly(
+    engine: ValueAssessmentEngine,
+) -> None:
+    """When ALL signals are gated, fair_value must equal market_price exactly."""
+    market = _make_market(yes_price=0.73)
+    empty_ob = OrderBook(
+        market_id="m1",
+        asset_id="t1",
+        bids=[],
+        asks=[],
+        spread=0.0,
+        midpoint=0.0,
+    )
+    result = await engine.assess(market, orderbook_data=empty_ob)
+
+    assert result.fair_value == pytest.approx(0.73)
+    assert result.confidence == pytest.approx(0.0)
+    assert result.edge_sources == []
+
+
+async def test_gating_external_signal_creates_edge_when_base_rate_excluded(
+    engine: ValueAssessmentEngine,
+) -> None:
+    """With base_rate gated, external signals must produce real edge.
+
+    Pre-fix: base_rate would output ~market_price and dampen the edge from
+    any external signal. Now base_rate is excluded under sparse data,
+    leaving the external signal to drive fair_value.
+    """
+    market = _make_market(yes_price=0.60)
+    # Strong negative signal (event_signal=0.30 → fair_value should drop)
+    result = await engine.assess(market, event_signal=0.30)
+
+    # Only event_signal fires → fair_value = 0.30
+    assert result.fair_value == pytest.approx(0.30)
+    # Edge is large enough to actually trigger something
+    assert abs(result.edge) > 0.20

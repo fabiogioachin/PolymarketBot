@@ -182,23 +182,27 @@ class SnapshotWriter:
         # yet been merged the attribute won't exist.
         valuations: dict[str, Any] = getattr(self._engine, "_last_valuations", {})
 
+        lookup = self._markets_lookup()
         result: list[DSSSnapshotMarket] = []
         for market_id, val in valuations.items():
             # val is a ValuationResult
             question = ""
-            # Try to get the question from the market_service cache
-            ms = getattr(self._engine, "_market_service", None)
-            if ms is not None:
-                market_cache: dict[str, Any] = getattr(ms, "_cache", {})
-                m = market_cache.get(market_id)
-                if m is not None:
-                    question = getattr(m, "question", "")
+            outcomes: dict[str, float] = {}
+            m = lookup.get(market_id)
+            if m is not None:
+                question = str(getattr(m, "question", "") or "")
+                for o in getattr(m, "outcomes", []) or []:
+                    name = str(getattr(o, "outcome", "") or "").strip()
+                    price = _opt_float(getattr(o, "price", None))
+                    if name and price is not None:
+                        outcomes[name] = price
 
             result.append(
                 DSSSnapshotMarket(
                     market_id=market_id,
                     question=question,
                     market_price=float(getattr(val, "market_price", 0.0)),
+                    outcomes=outcomes,
                     fair_value=_opt_float(getattr(val, "fair_value", None)),
                     edge_central=_opt_float(getattr(val, "fee_adjusted_edge", None)),
                     edge_lower=_opt_float(getattr(val, "edge_lower", None)),
@@ -259,6 +263,65 @@ class SnapshotWriter:
             return self._build_whale_from_memory(now, hours, pre_resolution_only)
         return []
 
+    def _markets_lookup(self) -> dict[str, Any]:
+        """Build a flat market_id → Market lookup from the MarketService cache.
+
+        MarketService stores cache values as ``(timestamp, value)`` tuples keyed
+        by ``"markets:..."`` (list) or ``"market:{id}"`` (single).  We unpack
+        both shapes into a plain dict so callers can do O(1) lookups by id.
+        """
+        if self._engine is None:
+            return {}
+        ms = getattr(self._engine, "_market_service", None)
+        if ms is None:
+            return {}
+        raw_cache: dict[str, Any] = getattr(ms, "_cache", {})
+        lookup: dict[str, Any] = {}
+        for key, entry in raw_cache.items():
+            value: Any = entry[1] if isinstance(entry, tuple) and len(entry) == 2 else entry
+            if isinstance(value, list):
+                for m in value:
+                    mid = getattr(m, "id", None)
+                    if mid:
+                        lookup[str(mid)] = m
+            elif key.startswith("market:"):
+                lookup[key.split(":", 1)[1]] = value
+        return lookup
+
+    def _outcome_for(self, market_id: str, raw_json: str, lookup: dict[str, Any]) -> str:
+        """Derive "Yes" or "No" from the asset_id stored in a trade's raw_json.
+
+        The CLOB /trades response includes ``asset_id`` (= token_id).  Each
+        market outcome stores its own token_id, so a simple membership check
+        tells us which leg was traded.
+        """
+        if not raw_json:
+            return ""
+        try:
+            import json as _json
+            raw = _json.loads(raw_json)
+        except Exception:
+            return ""
+        asset_id = str(raw.get("asset_id") or raw.get("token_id") or "")
+        if not asset_id:
+            return ""
+        m = lookup.get(market_id)
+        if m is None:
+            return ""
+        for o in getattr(m, "outcomes", []) or []:
+            if getattr(o, "token_id", "") == asset_id:
+                return str(getattr(o, "outcome", ""))
+        return ""
+
+    def _question_for(self, market_id: str, lookup: dict[str, Any] | None = None) -> str:
+        """Resolve the human-readable question for a market_id, or ''."""
+        if not market_id:
+            return ""
+        if lookup is None:
+            lookup = self._markets_lookup()
+        m = lookup.get(market_id)
+        return str(getattr(m, "question", "") or "") if m is not None else ""
+
     async def _build_whale_from_store(
         self,
         now: datetime,
@@ -268,6 +331,7 @@ class SnapshotWriter:
         """Query trade_store for whale trades across all markets."""
         cutoff_ts = (now - timedelta(hours=hours)).timestamp()
         result: list[DSSSnapshotWhale] = []
+        lookup = self._markets_lookup()
         try:
             # load_whale_trades requires a market_id; we use a broad query via
             # the SQL store directly. Fall back to orchestrator memory if the
@@ -277,7 +341,7 @@ class SnapshotWriter:
                 return []
             cursor = await conn.execute(
                 """SELECT timestamp, market_id, wallet_address, side,
-                          size_usd, is_pre_resolution, wallet_total_pnl
+                          size_usd, is_pre_resolution, wallet_total_pnl, raw_json
                    FROM whale_trades
                    WHERE timestamp >= ?
                    ORDER BY timestamp DESC
@@ -295,10 +359,15 @@ class SnapshotWriter:
                     if isinstance(ts_raw, int | float)
                     else now
                 )
+                market_id_str = str(row["market_id"])
                 result.append(
                     DSSSnapshotWhale(
                         timestamp=ts,
-                        market_id=str(row["market_id"]),
+                        market_id=market_id_str,
+                        question=self._question_for(market_id_str, lookup),
+                        outcome=self._outcome_for(
+                            market_id_str, str(row["raw_json"] or ""), lookup
+                        ),
                         wallet_address=str(row["wallet_address"] or ""),
                         side=str(row["side"] or ""),
                         size_usd=float(row["size_usd"] or 0.0),
@@ -323,6 +392,7 @@ class SnapshotWriter:
         """Fall back to WhaleOrchestrator's in-memory rolling window."""
         recent: list[Any] = getattr(self._whale_orch, "_recent_trades", [])
         cutoff = now - timedelta(hours=hours)
+        lookup = self._markets_lookup()
         result: list[DSSSnapshotWhale] = []
         for trade in recent:
             ts = getattr(trade, "timestamp", None)
@@ -331,10 +401,14 @@ class SnapshotWriter:
             is_pre = bool(getattr(trade, "is_pre_resolution", False))
             if pre_resolution_only and not is_pre:
                 continue
+            mid = str(getattr(trade, "market_id", ""))
+            raw_json = str(getattr(trade, "raw_json", "") or "")
             result.append(
                 DSSSnapshotWhale(
                     timestamp=ts,
-                    market_id=str(getattr(trade, "market_id", "")),
+                    market_id=mid,
+                    question=self._question_for(mid, lookup),
+                    outcome=self._outcome_for(mid, raw_json, lookup),
                     wallet_address=str(getattr(trade, "wallet_address", "")),
                     side=str(getattr(trade, "side", "")),
                     size_usd=float(getattr(trade, "size_usd", 0.0)),

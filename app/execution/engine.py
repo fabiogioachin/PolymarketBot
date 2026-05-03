@@ -98,9 +98,6 @@ class ExecutionEngine:
         self._token_to_market: dict[str, str] = {}
         self._last_manifold_refresh: datetime | None = None
         self._last_intel_refresh: datetime | None = None
-        self._last_whale_refresh: datetime | None = None
-        self._last_popular_refresh: datetime | None = None
-        self._last_leaderboard_refresh: datetime | None = None
         # Phase 13 S4a: cache of last valuations for DSS SnapshotWriter to read
         self._last_valuations: dict[str, ValuationResult] = {}
         # WebSocket orderbook cache (background task)
@@ -135,7 +132,10 @@ class ExecutionEngine:
             new_asset_ids = []
             for m in markets:
                 for outcome in m.outcomes:
-                    if outcome.token_id and outcome.token_id not in self._ws_client._subscribed_assets:
+                    if (
+                        outcome.token_id
+                        and outcome.token_id not in self._ws_client._subscribed_assets
+                    ):
                         new_asset_ids.append(outcome.token_id)
                         self._token_to_market[outcome.token_id] = m.id
             if new_asset_ids:
@@ -149,18 +149,13 @@ class ExecutionEngine:
         if self._intelligence is not None:
             await self._fetch_intelligence_signals(markets, external_signals, now)
 
-        # 2b-bis. Fetch whale trades (Phase 13 S2)
+        # 2b-bis. Inject whale_pressure + insider_pressure signals into VAE.
+        # NOTE: whale ingest itself is driven by IntelligenceScheduler
+        # (Phase 13 Fix 4). This call only READS from the orchestrator's
+        # store — it does not poll Polymarket. Keeping it here ensures the
+        # VAE always sees the freshest whale state at signal-generation time.
         if self._whale_orchestrator is not None:
-            await self._fetch_whale_signals(markets, now)
             await self._inject_whale_pressure_signals(markets, external_signals)
-
-        # 2b-ter. Snapshot popular markets (Phase 13 S2)
-        if self._popular_markets_orchestrator is not None:
-            await self._fetch_popular_markets(now)
-
-        # 2b-quater. Snapshot leaderboard (Phase 13 S2)
-        if self._leaderboard_orchestrator is not None:
-            await self._fetch_leaderboard(now)
 
         # 2c. Fetch KG pattern signals from Obsidian vault
         await self._fetch_kg_signals(markets, external_signals)
@@ -189,22 +184,29 @@ class ExecutionEngine:
                 valuations[v.market_id] = v
         result.markets_assessed = len(valuations)
 
-        # Phase 13 S4a: expose valuations for DSS SnapshotWriter + trigger tick.
-        # SnapshotWriter reads `self._last_valuations` and writes
-        # static/dss/intelligence_snapshot.json on a 5-min cadence (internal dedup).
+        # Phase 13 S4a: expose valuations for DSS SnapshotWriter to read.
+        # The SnapshotWriter is now driven by IntelligenceScheduler
+        # (Phase 13 Fix 4) on its own 5-minute cadence — no longer ticked
+        # from the engine, so DSS stays fresh in monitoring-only mode.
         self._last_valuations = valuations
-        try:
-            from app.core.dependencies import get_snapshot_writer
-
-            await get_snapshot_writer().tick()
-        except Exception as exc:
-            logger.warning("snapshot_writer_tick_failed", error=str(exc))
 
         # 4. UPDATE open positions with live prices + EVALUATE exits
         exited_market_ids: set[str] = set()
         await self._manage_positions(
             market_by_id, valuations, result, now, exited_market_ids
         )
+
+        # 4b. Dedup guard: capture token_ids of positions still open after exits.
+        # Strategies are stateless w.r.t. portfolio; without this guard, the same
+        # BUY signal would re-fire every tick and merge into the existing position
+        # (avg_price drift), surfacing as identical consecutive bets in the log.
+        open_position_token_ids: set[str] = set()
+        try:
+            for pos in await self._executor.get_positions():
+                if pos.size > 0.001:
+                    open_position_token_ids.add(pos.token_id)
+        except Exception as exc:
+            logger.warning("dedup_position_fetch_failed", error=str(exc))
 
         # 5. Generate new signals (with market reference for horizon)
         signal_market_pairs: list[tuple[Signal, Market]] = []
@@ -226,8 +228,21 @@ class ExecutionEngine:
                     if isinstance(result_signals, Signal):
                         result_signals = [result_signals]
                     for sig in result_signals:
-                        if sig.signal_type != SignalType.HOLD:
-                            signal_market_pairs.append((sig, market))
+                        if sig.signal_type == SignalType.HOLD:
+                            continue
+                        # Drop BUYs on tokens we already hold (BUG-1 dedup guard)
+                        if (
+                            sig.signal_type == SignalType.BUY
+                            and sig.token_id in open_position_token_ids
+                        ):
+                            logger.info(
+                                "signal_dropped_duplicate_position",
+                                market_id=sig.market_id,
+                                token_id=sig.token_id[:20],
+                                strategy=sig.strategy,
+                            )
+                            continue
+                        signal_market_pairs.append((sig, market))
                 except Exception as e:
                     result.errors.append(f"{strategy.name}: {e}")
 
@@ -391,8 +406,8 @@ class ExecutionEngine:
             if not market and market_id and self._market_service:
                 try:
                     market = await self._market_service.get_market(market_id)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("market_fetch_failed", market_id=market_id, error=str(exc))
 
             # ── 1. Check resolution ──────────────────────────────
             resolution = await check_resolution(market_id)
@@ -552,29 +567,6 @@ class ExecutionEngine:
         except Exception as exc:
             logger.warning("intelligence_fetch_failed", error=str(exc))
 
-    async def _fetch_whale_signals(
-        self,
-        markets: list[Market],
-        now: datetime,
-    ) -> None:
-        """Poll Polymarket /trades for whale activity on a slow cadence."""
-        from app.core.yaml_config import app_config
-
-        interval = app_config.intelligence.whale.tick_interval_seconds
-        if (
-            self._last_whale_refresh is not None
-            and (now - self._last_whale_refresh).total_seconds() < interval
-        ):
-            return
-
-        try:
-            whales = await self._whale_orchestrator.tick(markets)
-            self._last_whale_refresh = now
-            if whales:
-                logger.info("whale_signals_fetched", count=len(whales))
-        except Exception as exc:
-            logger.warning("whale_fetch_failed", error=str(exc))
-
     async def _inject_whale_pressure_signals(
         self,
         markets: list[Market],
@@ -640,50 +632,6 @@ class ExecutionEngine:
                 external_signals.setdefault(market.id, {})[
                     "insider_pressure"
                 ] = insider_signal
-
-    async def _fetch_popular_markets(self, now: datetime) -> None:
-        """Snapshot top-N markets by 24h volume on a slow cadence."""
-        from app.core.yaml_config import app_config
-
-        interval = (
-            app_config.intelligence.popular_markets.tick_interval_minutes * 60
-        )
-        if (
-            self._last_popular_refresh is not None
-            and (now - self._last_popular_refresh).total_seconds() < interval
-        ):
-            return
-
-        try:
-            snapshot = await self._popular_markets_orchestrator.tick()
-            self._last_popular_refresh = now
-            if snapshot:
-                logger.info("popular_markets_snapshot", count=len(snapshot))
-        except Exception as exc:
-            logger.warning("popular_markets_fetch_failed", error=str(exc))
-
-    async def _fetch_leaderboard(self, now: datetime) -> None:
-        """Snapshot top traders by PnL on a slow cadence."""
-        from app.core.yaml_config import app_config
-
-        interval = (
-            app_config.intelligence.leaderboard.tick_interval_minutes * 60
-        )
-        if (
-            self._last_leaderboard_refresh is not None
-            and (now - self._last_leaderboard_refresh).total_seconds() < interval
-        ):
-            return
-
-        try:
-            snapshot = await self._leaderboard_orchestrator.tick(
-                timeframe="monthly"
-            )
-            self._last_leaderboard_refresh = now
-            if snapshot:
-                logger.info("leaderboard_snapshot", count=len(snapshot))
-        except Exception as exc:
-            logger.warning("leaderboard_fetch_failed", error=str(exc))
 
     async def _fetch_manifold_signals(
         self, markets: list[Market], now: datetime

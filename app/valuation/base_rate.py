@@ -1,6 +1,7 @@
 """Base rate analyzer: historical resolution rates by market category."""
 
 from app.core.logging import get_logger
+from app.core.yaml_config import app_config
 from app.models.market import Market, MarketCategory
 from app.valuation.db import ResolutionDB
 
@@ -36,38 +37,20 @@ class BaseRateAnalyzer:
             await self.compute_base_rates()
         return self._rates.get(market.category.value, 0.5)
 
-    async def get_prior(self, market: Market) -> float:
-        """Get prior probability for a market.
+    async def get_prior(self, market: Market) -> float | None:
+        """Get prior probability for a market, or ``None`` when data is too sparse.
 
-        Uses base rate as starting point. If the market has outcomes with prices,
-        adjusts toward market consensus (Bayesian shrinkage).
+        Returns the **historical YES rate** for the market's category — an
+        independent prior, NOT a Bayesian blend with ``market_price``. The
+        engine's weighted average is what blends signals; baking ``market_price``
+        into a single signal silently anchors ``fair_value`` to ``market_price``
+        and collapses the edge across all other signals (P1 fix 2026-04-27).
 
-        Key principle: without historical data, trust the market price.
-        The market aggregates all public information — our uninformed 50% prior
-        should NOT override it. Only deviate from market price when we have
-        real evidence (historical resolution data for this category).
+        Below ``valuation.gating.min_base_rate_resolutions`` historical samples
+        the rate is too noisy to trust and we return ``None`` (signal excluded).
         """
-        base_rate = await self.get_base_rate(market)
-
-        # Shrinkage toward base_rate scales with evidence strength.
-        # Without evidence, the market price IS the best estimate.
         count = await self._db.get_resolution_count(category=market.category.value)
-        if count < 5:
-            # No meaningful evidence — mostly trust the market,
-            # but allow small deviation for other signals to work
-            shrinkage = 0.10  # 10% prior, 90% market
-        elif count < 20:
-            shrinkage = 0.20
-        elif count < 50:
-            shrinkage = 0.30
-        else:
-            shrinkage = 0.50  # Strong prior — 50% historical, 50% market
-
-        market_price = 0.5
-        if market.outcomes:
-            for outcome in market.outcomes:
-                if outcome.outcome.lower() == "yes":
-                    market_price = outcome.price
-                    break
-
-        return shrinkage * base_rate + (1 - shrinkage) * market_price
+        threshold = app_config.valuation.gating.min_base_rate_resolutions
+        if count < threshold:
+            return None
+        return await self.get_base_rate(market)

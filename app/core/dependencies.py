@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from app.risk.manager import RiskManager
     from app.services.bot_service import BotService
     from app.services.intelligence_orchestrator import IntelligenceOrchestrator
+    from app.services.intelligence_scheduler import IntelligenceScheduler
     from app.services.leaderboard_orchestrator import LeaderboardOrchestrator
     from app.services.manifold_service import ManifoldService
     from app.services.market_service import MarketService
@@ -45,6 +46,7 @@ _popular_markets_orchestrator: PopularMarketsOrchestrator | None = None
 _leaderboard_orchestrator: LeaderboardOrchestrator | None = None
 _subgraph_client: PolymarketSubgraphClient | None = None
 _snapshot_writer: SnapshotWriter | None = None
+_intelligence_scheduler: IntelligenceScheduler | None = None
 
 
 # ── Lazy accessors ───────────────────────────────────────────────────
@@ -340,6 +342,78 @@ async def get_execution_engine() -> ExecutionEngine:
             snapshot_writer.set_leaderboard_orchestrator(lb_orch)
 
     return _execution_engine
+
+
+def get_intelligence_scheduler() -> IntelligenceScheduler:
+    """Get the IntelligenceScheduler singleton.
+
+    Phase 13 Fix 4 (Team A): the scheduler decouples intelligence ingest
+    (whale / popular / leaderboard / snapshot) from ``ExecutionEngine.tick``.
+    Construction is side-effect-free; loops only spawn when
+    :func:`start_intelligence_scheduler` is awaited.
+
+    Wiring of orchestrators uses the late-binding ``set_*`` setter pattern.
+    The singleton is returned even if the orchestrators have not yet been
+    constructed — set them after the first call to this getter.
+    """
+    global _intelligence_scheduler  # noqa: PLW0603
+    if _intelligence_scheduler is None:
+        from app.services.intelligence_scheduler import IntelligenceScheduler
+
+        _intelligence_scheduler = IntelligenceScheduler(
+            config=app_config.intelligence.scheduler
+        )
+        logger.info("intelligence_scheduler_initialized")
+    return _intelligence_scheduler
+
+
+async def start_intelligence_scheduler() -> IntelligenceScheduler:
+    """Bootstrap intelligence orchestrators + start the scheduler loops.
+
+    Phase 13 Fix 4 (Team A): MUST be invoked from the FastAPI lifespan so
+    the scheduler runs even when the trading bot is stopped (monitoring-only
+    mode). This wires the same orchestrator singletons that the execution
+    engine uses, so the in-memory state (whale store, popular cache,
+    leaderboard cache) is shared between the scheduler and the engine's
+    ``_inject_whale_pressure_signals`` consumer.
+
+    Idempotent: calling twice is a no-op (the scheduler's ``start`` is
+    itself idempotent).
+    """
+    scheduler = get_intelligence_scheduler()
+
+    # Wire market service (whale loop needs the active universe)
+    scheduler.set_market_service(get_market_service())
+
+    # Wire orchestrators conditionally — same gating as get_execution_engine
+    if app_config.intelligence.whale.enabled:
+        whale_orch = get_whale_orchestrator()
+        # Trade store is wired lazily in get_execution_engine; if the engine
+        # has not been built yet the scheduler still works (the orchestrator
+        # falls back to in-memory state).
+        scheduler.set_whale_orchestrator(whale_orch)
+
+    if app_config.intelligence.popular_markets.enabled:
+        scheduler.set_popular_markets_orchestrator(
+            get_popular_markets_orchestrator()
+        )
+
+    if app_config.intelligence.leaderboard.enabled:
+        scheduler.set_leaderboard_orchestrator(get_leaderboard_orchestrator())
+
+    if app_config.dss.snapshot_writer.enabled:
+        scheduler.set_snapshot_writer(get_snapshot_writer())
+
+    await scheduler.start()
+    return scheduler
+
+
+async def stop_intelligence_scheduler() -> None:
+    """Stop the scheduler loops if running. Safe to call from the lifespan."""
+    global _intelligence_scheduler  # noqa: PLW0603
+    if _intelligence_scheduler is None:
+        return
+    await _intelligence_scheduler.stop()
 
 
 async def get_bot_service() -> BotService:

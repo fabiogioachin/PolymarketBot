@@ -23,6 +23,7 @@ class DSSSnapshotMarket(BaseModel):
     market_id: str
     question: str
     market_price: float
+    outcomes: dict[str, float] = {}  # e.g. {"Yes": 0.45, "No": 0.55}
     fair_value: float | None = None
     edge_central: float | None = None
     edge_lower: float | None = None
@@ -37,8 +38,10 @@ class DSSSnapshotWhale(BaseModel):
 
     timestamp: datetime
     market_id: str
+    question: str = ""  # Resolved from market_service cache; empty if unknown.
+    outcome: str = ""   # "Yes" or "No" — derived from asset_id in raw_json.
     wallet_address: str
-    side: str
+    side: str           # BUY or SELL (on the outcome above)
     size_usd: float
     is_pre_resolution: bool = False
     wallet_total_pnl: float | None = None

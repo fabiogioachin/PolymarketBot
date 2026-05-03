@@ -52,41 +52,92 @@
   }
 
   // ── Banner / freshness ─────────────────────────────────────────────
-  function ageMinutes(generatedAtIso) {
-    if (!generatedAtIso) return Infinity;
-    const t = Date.parse(generatedAtIso);
-    if (Number.isNaN(t)) return Infinity;
-    return Math.max(0, (Date.now() - t) / 60000);
+  // PURE function — no DOM, no fetch. Exposed on window for testability.
+  // Decides 4-tier staleness state given age in seconds.
+  function getStalenessState(ageSeconds) {
+    if (ageSeconds === null || ageSeconds === undefined || ageSeconds < 0) {
+      return { level: "unknown", label: "No snapshot available", color: "gray", icon: "⚪" };
+    }
+    if (ageSeconds < 360) {  // < 6 min
+      return {
+        level: "fresh",
+        label: `Updated ${Math.floor(ageSeconds)}s ago`,
+        color: "green",
+        icon: "🟢",
+      };
+    }
+    if (ageSeconds < 600) {  // < 10 min
+      return {
+        level: "aging",
+        label: `Aging — ${Math.floor(ageSeconds / 60)}m old`,
+        color: "yellow",
+        icon: "🟡",
+      };
+    }
+    if (ageSeconds < 1800) {  // < 30 min
+      return {
+        level: "stale",
+        label: `Stale — ${Math.floor(ageSeconds / 60)}m old`,
+        color: "orange",
+        icon: "🟠",
+      };
+    }
+    return {
+      level: "offline",
+      label: `BACKEND OFFLINE — last update ${Math.floor(ageSeconds / 60)}m ago`,
+      color: "red",
+      icon: "🔴",
+    };
+  }
+  // Expose for external testing (e.g. console / standalone unit test runner)
+  window.getStalenessState = getStalenessState;
+
+  // Compute age in seconds from snapshot.generated_at (ISO string).
+  // Returns null when snapshot or generated_at is missing/invalid → triggers 'unknown' level.
+  function snapshotAgeSeconds(snapshot) {
+    if (!snapshot || !snapshot.generated_at) return null;
+    const t = Date.parse(snapshot.generated_at);
+    if (Number.isNaN(t)) return null;
+    return Math.max(0, (Date.now() - t) / 1000);
   }
 
-  function formatAge(min) {
-    if (!Number.isFinite(min)) return "?";
-    if (min < 1) return "just now";
-    if (min < 60) return `${Math.floor(min)}m ago`;
-    const h = Math.floor(min / 60);
-    if (h < 24) return `${h}h ${Math.floor(min % 60)}m ago`;
-    return `${Math.floor(h / 24)}d ago`;
-  }
+  const BANNER_LEVEL_CLASSES = [
+    "banner-fresh",
+    "banner-aging",
+    "banner-stale",
+    "banner-offline",
+    "banner-unknown",
+    "banner-missing", // legacy class kept for cleanup safety
+  ];
 
   function updateBanner() {
     const el = document.getElementById("snapshot-banner");
     if (!el) return;
-    el.classList.remove("banner-fresh", "banner-stale", "banner-missing");
 
-    if (!state.snapshot) {
-      el.classList.add("banner-missing");
-      el.textContent =
-        "❌ No intelligence data (first run? start backend with: docker compose --profile full up)";
-      return;
-    }
+    const ageSeconds = snapshotAgeSeconds(state.snapshot);
+    const stateInfo = getStalenessState(ageSeconds);
 
-    const age = ageMinutes(state.snapshot.generated_at);
-    if (!state.snapshotStale && age < CFG.fresh_threshold_minutes) {
-      el.classList.add("banner-fresh");
-      el.textContent = `✅ Intelligence fresh (updated ${formatAge(age)})`;
-    } else {
-      el.classList.add("banner-stale");
-      el.textContent = `⚠️ Intelligence stale (last update ${formatAge(age)} — backend may be down)`;
+    // Reset classes, apply level-specific class
+    el.classList.remove(...BANNER_LEVEL_CLASSES);
+    el.classList.add(`banner-${stateInfo.level}`);
+
+    // Render: icon + label, plus help text injected as sibling for stale/offline
+    el.textContent = `${stateInfo.icon} ${stateInfo.label}`;
+
+    // Manage help text node — sibling appended after the banner (sticky header area)
+    let helpEl = document.getElementById("snapshot-banner-help");
+    const needsHelp = stateInfo.level === "offline" || stateInfo.level === "stale";
+    if (needsHelp) {
+      if (!helpEl) {
+        helpEl = document.createElement("div");
+        helpEl.id = "snapshot-banner-help";
+        helpEl.className = "banner-help";
+        // Insert after banner element
+        el.insertAdjacentElement("afterend", helpEl);
+      }
+      helpEl.textContent = "Run `POST /api/v1/bot/start` or check backend logs.";
+    } else if (helpEl) {
+      helpEl.remove();
     }
   }
 
@@ -324,7 +375,7 @@
     count.textContent = String(markets.length);
 
     if (markets.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7" class="empty">No monitored markets in snapshot.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" class="empty">No monitored markets in snapshot.</td></tr>`;
       return;
     }
 
@@ -340,10 +391,25 @@
           : reco.includes("SELL")
           ? "reco-sell"
           : "reco-hold";
+        const outcomes = m.outcomes || {};
+        // Case-insensitive lookup so backend can ship "Yes"/"YES"/"yes" etc.
+        const findPrice = (label) => {
+          const target = label.toLowerCase();
+          for (const k of Object.keys(outcomes)) {
+            if (k.toLowerCase() === target) return outcomes[k];
+          }
+          return null;
+        };
+        const yesPrice = findPrice("yes");
+        const noPrice = findPrice("no");
+        // Fallback: market_price is the YES probability by Polymarket convention.
+        const yesShown = yesPrice ?? livePrice ?? m.market_price;
+        const noShown = noPrice ?? (yesShown != null ? 1 - yesShown : null);
         return `
           <tr data-market-id="${escapeHtml(m.market_id)}">
             <td title="${escapeHtml(m.question)}">${escapeHtml((m.question || shortMarket(m.market_id)).slice(0, 60))}</td>
-            <td class="num">${fmtNum(livePrice ?? m.market_price, 3)}</td>
+            <td class="num side-buy">${fmtNum(yesShown, 3)}</td>
+            <td class="num side-sell">${fmtNum(noShown, 3)}</td>
             <td class="num">${fmtNum(m.fair_value, 3)}</td>
             <td class="num ${m.edge_dynamic > 0 ? "pos" : m.edge_dynamic < 0 ? "neg" : ""}">${fmtPct(m.edge_dynamic)}</td>
             <td class="num ${volClass(vol)}">${fmtPct(vol, 2)}</td>
@@ -380,12 +446,18 @@
         if (w._insider || w.is_pre_resolution) flags.push(`<span class="badge badge-insider">insider</span>`);
         if (w.size_usd >= 1_000_000) flags.push(`<span class="badge badge-mega">$1M+</span>`);
         else if (w.size_usd >= 100_000) flags.push(`<span class="badge badge-whale">whale</span>`);
+        const marketLabel = w.question
+          ? w.question.slice(0, 60)
+          : shortMarket(w.market_id);
+        const marketTitle = w.question
+          ? `${w.question} (${w.market_id})`
+          : w.market_id;
         return `
           <tr>
             <td>${escapeHtml(new Date(w.timestamp).toLocaleTimeString())}</td>
-            <td>${escapeHtml(shortMarket(w.market_id))}</td>
+            <td title="${escapeHtml(marketTitle)}">${escapeHtml(marketLabel)}</td>
             <td><code>${escapeHtml(shortAddr(w.wallet_address))}</code></td>
-            <td><span class="${sideClass}">${escapeHtml(w.side || "—")}</span></td>
+            <td><span class="${sideClass}">${escapeHtml(w.side || "—")}</span>${w.outcome ? ` <span class="outcome-badge">${escapeHtml(w.outcome)}</span>` : ""}</td>
             <td class="num">${fmtUsd(w.size_usd)}</td>
             <td>${flags.join(" ") || "—"}</td>
           </tr>
@@ -580,8 +652,8 @@
       refreshClobPrices().catch((e) => console.warn("[DSS] CLOB refresh failed:", e));
     }, CFG.clob_poll_ms);
 
-    // Re-tick banner every 30s so "Xm ago" stays current
-    setInterval(updateBanner, 30 * 1000);
+    // Re-evaluate staleness every 10s so banner level escalates without a fetch
+    setInterval(updateBanner, 10 * 1000);
   }
 
   if (document.readyState === "loading") {

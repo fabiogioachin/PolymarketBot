@@ -11,6 +11,11 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_v1_router
 from app.core.config import settings
+from app.core.dependencies import (
+    get_bot_service,
+    start_intelligence_scheduler,
+    stop_intelligence_scheduler,
+)
 from app.core.logging import get_logger, setup_logging
 from app.core.yaml_config import app_config
 
@@ -19,7 +24,12 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Application lifespan: startup and shutdown."""
+    """Application lifespan: startup and shutdown.
+
+    Auto-starts the trading bot loop when ``app_config.bot.auto_start`` is True
+    so the execution engine (and the snapshot writer that ticks inside it) run
+    without requiring an explicit ``POST /api/v1/bot/start`` call.
+    """
     setup_logging(log_level=settings.log_level)
     logger.info(
         "starting",
@@ -28,8 +38,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         env=settings.app_env,
         dry_run=settings.dry_run,
     )
-    yield
-    logger.info("shutting_down")
+
+    bot = None
+    if app_config.bot.auto_start:
+        bot = await get_bot_service()
+        await bot.start(interval_seconds=app_config.bot.tick_interval_seconds)
+        logger.info(
+            "bot_auto_started",
+            interval=app_config.bot.tick_interval_seconds,
+        )
+    else:
+        logger.info("bot_auto_start_skipped", reason="config disabled")
+
+    try:
+        await start_intelligence_scheduler()
+    except Exception as exc:
+        logger.warning("intelligence_scheduler_start_failed", error=str(exc))
+
+    try:
+        yield
+    finally:
+        if bot is not None:
+            await bot.stop()
+        try:
+            await stop_intelligence_scheduler()
+        except Exception as exc:
+            logger.debug("intelligence_scheduler_stop_failed", error=str(exc))
+        logger.info("shutting_down")
 
 
 app = FastAPI(

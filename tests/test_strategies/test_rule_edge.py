@@ -155,11 +155,16 @@ async def test_no_signal_when_ambiguous_rules_drop_confidence_too_low() -> None:
     assert await strategy.evaluate(market, valuation) is None
 
 
-# ── SELL signal ───────────────────────────────────────────────────────────────
+# ── Negative edge → BUY NO token (BUG-2 regression) ──────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_sell_signal_when_negative_edge_with_clear_rules() -> None:
+async def test_buy_no_token_when_negative_edge_with_clear_rules() -> None:
+    """Regression for BUG-2: negative edge must emit BUY on NO token, not SELL.
+
+    Mirrors the value_edge.py contract — when fair_value < market_price - min_edge,
+    YES is overpriced, so the strategy buys NO (which profits when YES drops).
+    """
     strategy = RuleEdgeStrategy()
     market = _make_market()
     strategy.set_rule_analysis(market.id, _make_clear_analysis())
@@ -174,8 +179,35 @@ async def test_sell_signal_when_negative_edge_with_clear_rules() -> None:
     signal = await strategy.evaluate(market, valuation)
 
     assert signal is not None
-    assert signal.signal_type == SignalType.BUY  # BUY the NO token when YES is overpriced
-    assert signal.token_id == "t2"  # NO outcome
+    assert signal.signal_type == SignalType.BUY, "must be BUY (on NO), never SELL"
+    assert signal.token_id == "t2", "must target NO outcome token"
+    assert signal.edge_amount == pytest.approx(-0.10), "preserves signed edge"
+    # Clear rules + trusted source still boost confidence on negative-edge BUY
+    assert signal.confidence > 0.6, "clear rules boost should still apply"
+
+
+@pytest.mark.asyncio
+async def test_buy_no_token_when_negative_edge_with_ambiguous_rules() -> None:
+    """Negative-edge BUY-NO behavior holds under ambiguous rules too."""
+    strategy = RuleEdgeStrategy()
+    market = _make_market()
+    strategy.set_rule_analysis(market.id, _make_ambiguous_analysis())
+    valuation = _make_valuation(
+        fee_adjusted_edge=-0.20,
+        edge=-0.20,
+        fair_value=0.40,
+        recommendation=Recommendation.SELL,
+        confidence=0.7,
+    )
+
+    signal = await strategy.evaluate(market, valuation)
+
+    assert signal is not None
+    assert signal.signal_type == SignalType.BUY
+    assert signal.token_id == "t2"
+    assert signal.edge_amount == pytest.approx(-0.20)
+    # Ambiguity penalty reduces confidence vs the original 0.7
+    assert signal.confidence < 0.7
 
 
 # ── No analysis pre-loaded: falls back to parser ─────────────────────────────

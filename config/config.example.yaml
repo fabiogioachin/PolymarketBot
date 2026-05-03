@@ -67,6 +67,14 @@ valuation:
     velocity_alpha: 0.5           # scales velocity_against into penalty
     strong_edge_threshold: 0.10   # |edge_central| above this bypasses velocity penalty
     min_observations: 3           # min price points to compute vol
+  gating:
+    # P1 fix 2026-04-27 — prevents signals from anchoring fair_value to market_price
+    # when their underlying data source is empty. Without these gates,
+    # base_rate / cross_market / microstructure silently return values
+    # ≈ market_price under sparse data → edge ≈ 0 across the whole tick.
+    min_base_rate_resolutions: 5     # below this, base_rate signal excluded (return None)
+    require_cross_market_correlations: true   # exclude cross_market when no correlated markets
+    require_microstructure_data: true         # exclude microstructure when orderbook AND history empty
 
 intelligence:
   gdelt:
@@ -130,6 +138,16 @@ intelligence:
     api_key_env: "THEGRAPH_API_KEY"
     rate_limit_per_minute: 100
     enrichment_ttl_hours: 1
+  scheduler:
+    # Phase 13 Fix 4 — independent intelligence ingest scheduler.
+    # Drives whale / popular / leaderboard / snapshot orchestrators on
+    # their own asyncio loops, decoupled from ExecutionEngine.tick so the
+    # DSS dashboard stays fresh in monitoring-only mode (bot stopped).
+    enabled: true
+    whale_interval_seconds: 60
+    popular_interval_seconds: 300        # 5 min
+    leaderboard_interval_seconds: 900    # 15 min
+    snapshot_interval_seconds: 300       # 5 min
 
 strategies:
   enabled:
@@ -175,3 +193,11 @@ dss:
     enabled: true
     output_path: "static/dss/intelligence_snapshot.json"
     tick_interval_minutes: 5
+
+bot:
+  # When true (default), the trading loop starts automatically on backend boot
+  # — no need to call POST /api/v1/bot/start manually. The DSS snapshot writer
+  # ticks inside the engine loop, so disabling this leaves the dashboard stale.
+  # Set to false only if you want to gate startup behind an explicit API call.
+  auto_start: true
+  tick_interval_seconds: 60

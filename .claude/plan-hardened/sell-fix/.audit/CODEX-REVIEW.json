@@ -1,0 +1,162 @@
+{
+  "reviewer": "code-reviewer",
+  "reviewer_note": "Codex CLI not available; substituting code-reviewer for adversarial pass per /plan-hardened skill fallback policy.",
+  "plan_path": ".claude/plan-hardened/PLAN.draft.md",
+  "issues": [
+    {
+      "id": "R2-01",
+      "severity": "BLOCKER",
+      "category": "incorrect_claim",
+      "description": "Plan section 'File impattati' claims 'Altre strategie (arbitrage.py, rule_edge.py, resolution.py, value_edge.py) — non emettono SELL strategico'. This is FALSE for app/strategies/resolution.py:120 — it emits SignalType.SELL on the NO token to express 'BUY NO' (identical bug pattern to the three strategies in scope). It is also FALSE for app/strategies/arbitrage.py:141,152 — those are legitimate strategic SELL emissions (short-leg arbitrage when YES+NO > 1). The plan conflates the two: arbitrage SELL is intentional (uses existing positions or short-style legs), but resolution.py SELL is the SAME bug being fixed. Skipping resolution.py leaves a known instance of the bug live in production.",
+      "fix": "Either (a) widen the scope to include app/strategies/resolution.py and tests/test_strategies/test_resolution.py:189 with the same SELL→BUY-NO refactor, or (b) explicitly call out resolution.py as having the same bug and document a separate follow-up issue with file:line reference. Update the 'Do NOT modify' list and Assumption 6 accordingly. Decision must be made BEFORE implementation, not deferred."
+    },
+    {
+      "id": "R2-02",
+      "severity": "BLOCKER",
+      "category": "incorrect_claim",
+      "description": "V5 verification (line 326): `rg \"SignalType\\.SELL\" app/strategies/` will NEVER return 0 results. Even with the planned changes, arbitrage.py:141,152 will still emit SignalType.SELL legitimately (and resolution.py:120 if not in scope per R2-01). The 'Done condition' V6 line 336 inherits this falsehood: '[ ] V5: rg \"SignalType.SELL\" app/strategies/ ritorna 0 results' — the implementer will be unable to satisfy this gate.",
+      "fix": "Replace V5 grep with a more targeted assertion. Two options: (1) `rg \"SignalType\\.SELL\" app/strategies/sentiment.py app/strategies/event_driven.py app/strategies/knowledge_driven.py` (must be 0), keeping arbitrage/resolution out of the assertion; or (2) `rg --files-without-match \"# legitimate SELL\" -g \"!arbitrage.py\" -g \"!resolution.py\" SignalType.SELL app/strategies/` with explicit allowlist comments in arbitrage.py and resolution.py. Pick option (1) for simplicity. Update V6 accordingly."
+    },
+    {
+      "id": "R2-03",
+      "severity": "BLOCKER",
+      "category": "incorrect_claim",
+      "description": "Ambiguity A4 (lines 256-258) claims `engine.py:271-275 risk KB classification uses segno → influisce` (uses sign → impacts classification). This is FALSE. engine.py:270 reads `edge = abs(signal.edge_amount) if signal.edge_amount else 0.0`. The classification is sign-agnostic. Same for priority scoring at engine.py:255 (also `abs(...)`). The drafter's analysis of A4 is materially wrong, which weakens the rationale for choosing option (a) — there is essentially NO downstream consumer that distinguishes signed edge_amount today (apart from log-printed strings at engine.py:339,353).",
+      "fix": "Correct A4: 'engine.py:255 priority uses abs() → agnostic; engine.py:271-275 risk KB also uses abs() → agnostic; engine.py:339,353 log raw signed value. snapshot_writer.py:204 reads valuation.market_price not signal.edge_amount. risk/manager.py:202 uses abs(signal.edge_amount) for sizing → agnostic.' This means option (a) and option (b) are functionally equivalent today; the choice is a documentation/log-clarity decision only. Surface this correctly so the user can decide on the right basis."
+    },
+    {
+      "id": "R2-04",
+      "severity": "BLOCKER",
+      "category": "missing_step",
+      "description": "Position-sizing latent bug not flagged. engine.py:294 sets `price = signal.market_price if signal.market_price > 0 else 0.5` and engine.py:297 calls `self._risk.size_position(signal, balance.available, price)`. risk/manager.py:202 then computes shares via `from_signal(capital, price, ...)`. With option A in A1 (pass valuation.market_price = YES price for a BUY-NO order), the SHARE COUNT is computed as `size_eur / yes_price`. If YES=0.85 and NO=0.15, a 5 EUR allocation buys ~5.88 NO shares using the wrong (YES) price reference, but the executor places `OrderRequest(price=0.85, size=5.88)` — i.e., a NO-token BUY at a YES-token price of 0.85. In dry_run this 'works' but mis-reports the trade; in shadow/live it would either reject or fill at marketprice but with completely wrong economics tracking. Plan calls this 'bug latente identico a value_edge' but does not mark it as a release blocker for live mode. The fix is meant to make negative-edge signals SAFE, not silently broken differently.",
+      "fix": "Either (1) override A1 and use `1.0 - valuation.market_price` for the BUY-NO branch (and accept the divergence with value_edge.py, scheduling a parallel value_edge fix), OR (2) explicitly mark the resulting Signal as 'live-mode unsafe pending value_edge.py companion fix' and gate live mode behind a separate todo. Document the chosen path with file:line evidence (engine.py:294, risk/manager.py:202)."
+    },
+    {
+      "id": "R2-05",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "description": "Multi-outcome (non-binary) markets unaddressed. Assumption 5 claims 'Mercati binari ... Mercati non-binari sono esclusi a monte dal MarketService filter'. No file:line evidence is given for this claim. If the filter is configurable, drift, or fails, evaluate() may be called on a 3+ outcome market. With strict name matching `o.outcome.lower() == \"no\"`, none will match — return None — which is safe-by-construction now (the plan adds a None-token return). However: (a) no test covers this case, (b) the plan does not document the assumption with a file:line reference, (c) if a market has both 'No' and another negative outcome, name match will pick the first 'no' alphabetically — possibly incorrect.",
+      "fix": "Add a unit test for each of the three strategies: `test_returns_none_for_multi_outcome_market` with three outcomes (Yes/No/Maybe). Add file:line citation in Assumption 5 to the actual filter (likely app/services/market.py). Optionally, add `len(market.outcomes) == 2` as a guard in the strategies, returning None otherwise."
+    },
+    {
+      "id": "R2-06",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "description": "Empty `token_id` not guarded. The new pattern `next((o.token_id for o in market.outcomes if o.outcome.lower() == target_outcome), None)` returns the first matching `o.token_id` even if it is the empty string `\"\"` (Outcome.token_id has `str` type with no NonEmpty validator — see app/models/market.py:25). If upstream data pipeline yields an Outcome with `outcome=\"No\"` but `token_id=\"\"`, the strategies emit a Signal with empty token_id. engine.py:294 protects price > 0 but does NOT protect token_id. The OrderRequest at engine.py:313 receives `token_id=\"\"`, which the executor will attempt to submit. The Signal model at app/models/signal.py:20 declares `token_id: str = \"\"` as default — explicitly allowed.",
+      "fix": "Strengthen the guard in each strategy: change the existence check to `if not token_id:` (covers None and empty string). Add a unit test `test_skips_signal_when_no_token_id_empty` for each strategy with `Outcome(token_id=\"\", outcome=\"No\", price=0.45)`."
+    },
+    {
+      "id": "R2-07",
+      "severity": "MAJOR",
+      "category": "missing_step",
+      "description": "Cross-token same-market dedup race not addressed. engine.py:233-244 (BUG-1 dedup guard) checks ONLY `sig.token_id in open_position_token_ids`. After this fix, sentiment can emit BUY YES at tick T1, then BUY NO on the SAME market at T2 (e.g., sentiment flips). The dedup guard does not detect cross-token same-market position duplication. We could end up holding YES + NO on the same market, which is a partial hedge but counterproductive given fees. Plan does not flag this as out-of-scope or a follow-up.",
+      "fix": "Document this scenario in 'Note implementative' as a known limitation that the fix introduces and recommend a follow-up issue: 'After enabling BUY-NO emission, engine.py:233-244 dedup should also skip BUY signals on a market where any token of that market is already held'. File: app/execution/engine.py:233-244."
+    },
+    {
+      "id": "R2-08",
+      "severity": "MAJOR",
+      "category": "ambiguous",
+      "description": "Step 2.2 is vague. Plan says 'Aggiornare il logger.info (linea 119-126) per registrare target_outcome invece (o accanto a) signal_type'. The phrase 'invece (o accanto a)' (instead of, or alongside) is undecided. event_driven.py:122 currently logs `signal_type=signal_type` — after refactor, this is ALWAYS BUY, so it loses information. The implementer is left to guess.",
+      "fix": "Replace with: 'Replace `signal_type=signal_type` at line 122 with `target_outcome=target_outcome`. Keep `combined_edge` and `fresh_event` and `patterns` fields unchanged.' Same clarification needed for sentiment.py:111-118 (line 114 `signal_type=signal_type`) and knowledge_driven.py:91-98 (line 94 `signal_type=signal_type`) — all three loggers need the same explicit treatment, but Step 1 and Step 3 omit any mention of the logger.info."
+    },
+    {
+      "id": "R2-09",
+      "severity": "MAJOR",
+      "category": "missing_step",
+      "description": "Step 1.3 misses logger.info update for sentiment.py and reasoning order. Step 1.3 lists rename, check, token_id calc, hardcode signal_type, and reasoning. It does NOT specify what happens to the `logger.info` block at sentiment.py:111-118 which references `signal_type=signal_type`. After hardcoding `signal_type = SignalType.BUY` immediately before the Signal(), the logger above it would now emit `signal_type=BUY` always (informationally useless). Step 1.4 covers reasoning but not logging.",
+      "fix": "Add Step 1.3 sub-bullet: 'Update `logger.info` at sentiment.py:111-118: replace `signal_type=signal_type` with `target_outcome=target_outcome` (or add it alongside).' Mirror in Step 3.3 for knowledge_driven.py:91-98 and Step 2.2 (already partly there but vague — see R2-08)."
+    },
+    {
+      "id": "R2-10",
+      "severity": "MAJOR",
+      "category": "ambiguous",
+      "description": "Test placement convention not specified. tests/test_sentiment.py uses class-based grouping (TestProtocol, TestReturnsNone, TestSignalGeneration, TestBaseline). tests/test_knowledge_driven.py same (TestProtocol, TestReturnsNone, TestSignalGeneration). tests/test_event_driven.py uses MODULE-LEVEL functions (no classes). Plan adds tests 4.3, 4.4, 5.2, 5.3, 6.3, 6.4 without specifying location. Implementer may put 4.3 inside TestSignalGeneration but 5.2 at module level — fine, but the plan should be explicit to avoid review churn.",
+      "fix": "For each new test, specify: '[Step 4.3] Add `test_skips_signal_when_no_outcome_missing` as a method inside class `TestSignalGeneration` in test_sentiment.py'. Same for 4.4. For test_event_driven.py (5.2, 5.3): module-level `@pytest.mark.asyncio` async function. For test_knowledge_driven.py (6.3, 6.4): inside class `TestSignalGeneration`."
+    },
+    {
+      "id": "R2-11",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "description": "Outcome name matching is brittle. Pattern `o.outcome.lower() == \"no\"` matches only exact lowercase 'no'. Real upstream Polymarket data has been observed with outcomes like 'No' (handled), 'NO' (handled by lower()), 'False' / 'Vero'/'Falso' (Italian), 'True'/'False', whitespace-padded ' No ' (NOT handled — `'  no  '.lower() != 'no'`). Plan acknowledges A2 (no_token_id field doesn't exist) but does not flag the matching brittleness. value_edge.py has the same brittleness.",
+      "fix": "Either (a) strip+lower: `o.outcome.strip().lower() == \"no\"`, or (b) document the brittleness as out-of-scope with a follow-up. Option (a) costs nothing and is safer. Apply to all three modified strategies. Add a test `test_matches_outcome_with_whitespace` in at least one strategy to lock this in."
+    },
+    {
+      "id": "R2-12",
+      "severity": "MAJOR",
+      "category": "missing_step",
+      "description": "tests/test_risk/test_manager.py:119 uses `signal_type=SignalType.SELL` to test risk manager rejection logic. After the fix, no strategy in the named scope emits SELL — but the risk manager STILL needs to handle SELL (because position_monitor uses it for exits and arbitrage uses it strategically). Plan does not list this test, so implementer might 'helpfully' update or remove it. The test should remain unchanged. Listing it explicitly in 'Do NOT modify' would prevent collateral edits.",
+      "fix": "Add to 'Do NOT modify' list: 'tests/test_risk/test_manager.py — uses SignalType.SELL to test risk manager exit-side handling; unrelated to this fix.' Same for tests/test_strategies/test_arbitrage.py and tests/test_strategies/test_resolution.py (the SELL assertions there are legitimate and out of scope)."
+    },
+    {
+      "id": "R2-13",
+      "severity": "MAJOR",
+      "category": "missing_step",
+      "description": "No test covers the priority scoring path with negative-edge signals. After the fix, sentiment/event_driven/knowledge_driven emit BUY-NO with `edge_amount = edge` (signed negative per A4). engine.py:255 takes `abs(sig.edge_amount)`, so priority sorting works. But there is NO regression test verifying that a BUY-NO signal sorts equivalently to a BUY-YES signal of equal absolute edge. This is exactly the area where the new behavior could silently break.",
+      "fix": "Add an integration-style test in tests/test_execution/test_engine.py (or where `_priority` lives) confirming `_priority((sig_buy_no_minus_0_06, mkt))` ≈ `_priority((sig_buy_yes_plus_0_06, mkt))` (same days_to_resolution). If this isn't strictly required, at minimum add a unit test on the strategy that asserts `result.edge_amount < 0` for BUY-NO so the sign convention is locked."
+    },
+    {
+      "id": "R2-14",
+      "severity": "MAJOR",
+      "category": "scope_creep",
+      "description": "Reasoning string overhaul is scope creep. Steps 1.4 and 3.4 propose rewriting the reasoning string to include 'BUY YES'/'BUY NO' direction labels. The minimum-viable fix only requires changing signal_type and token_id. Reasoning string rewrites change the user-visible audit trail and may break log parsers, dashboards, or downstream summarization. Plan does not justify why this is necessary for the fix.",
+      "fix": "Either (a) drop reasoning rewrite from scope (keep the original 'bullish'/'bearish' wording) and document as a follow-up, or (b) justify it explicitly: 'reasoning rewrite is required because the existing string says \"aligns with fee-adjusted edge\" without disambiguating direction, which would be misleading post-fix when the same string accompanies a BUY on either token'. Pick (a) for minimal scope."
+    },
+    {
+      "id": "R2-15",
+      "severity": "MAJOR",
+      "category": "missing_step",
+      "description": "Plan does not enumerate `_resolve_signal_type` callers across tests. While Assumption 9 claims 'no test ne usa direttamente la firma (verificato: test usano solo evaluate)', this is not verifiable from the plan and may not include private-helper tests in subdirectories or future tests. A grep verification is missing from V5.",
+      "fix": "Add to V5: `rg \"_resolve_signal_type|_resolve_target_outcome\" tests/` must match only test files that we update (or none if the helper is never directly tested). Add to V5: `rg \"_pick_token\" tests/` likewise."
+    },
+    {
+      "id": "R2-16",
+      "severity": "MINOR",
+      "category": "edge_case",
+      "description": "Threshold equality boundary in event_driven. After refactor, `target_outcome = \"yes\" if combined_edge > 0 else \"no\"`. When `combined_edge == 0` exactly, the threshold filter at line 86 `abs(combined_edge) < _MIN_COMBINED_EDGE` returns True (skip). So this branch is unreachable. Plan correctly notes this in A6. However, after the refactor, if the threshold ever changes to `<=`, the assignment becomes silently 'no' — a fragile coupling.",
+      "fix": "Use explicit `if combined_edge > 0: target_outcome = \"yes\"; elif combined_edge < 0: target_outcome = \"no\"; else: return None` — even though unreachable today, it's defensive and matches the helper signature in sentiment.py and knowledge_driven.py."
+    },
+    {
+      "id": "R2-17",
+      "severity": "MINOR",
+      "category": "missing_step",
+      "description": "Plan does not specify whether `_resolve_target_outcome` should return `Literal[\"yes\", \"no\"] | None` or `str | None`. mypy --strict (V2) will type-check this. Returning `str | None` allows arbitrary strings later (typo risk). Returning `Literal` is safer and self-documenting.",
+      "fix": "Specify in Steps 1.1 and 3.1: `def _resolve_target_outcome(self, sentiment: float, edge: float) -> Literal[\"yes\", \"no\"] | None`. Add `from typing import Literal` import where needed."
+    },
+    {
+      "id": "R2-18",
+      "severity": "MINOR",
+      "category": "missing_step",
+      "description": "Plan adds `test_buy_no_signal_market_price_equals_valuation_market_price` (4.4, 5.3, 6.4) which ASSERTS the latent bug from A1 (passing YES price for NO order). This test ENSHRINES the bug rather than flagging it. If the user later picks option B in A1 (use `1.0 - valuation.market_price`), this test will fail and need updating. The test is correct for option A, but it makes future correction costlier.",
+      "fix": "Either (a) drop the test (it's redundant — test_buy_no_token_is_no_outcome already covers the BUY-NO path), or (b) name it `test_buy_no_signal_market_price_currently_equals_yes_price_pending_value_edge_followup` so the next reader understands it locks in a known-suboptimal choice."
+    },
+    {
+      "id": "R2-19",
+      "severity": "MINOR",
+      "category": "missing_step",
+      "description": "Plan does not address `tests/test_execution/test_engine.py` integration tests. The engine's signal-handling path is exercised by integration tests; some may construct Signal objects with `signal_type=SignalType.SELL` and assert behavior that was based on the old strategy contract. A grep `rg \"SignalType.SELL\" tests/test_execution/` is not in the plan.",
+      "fix": "Add to V5: `rg \"SignalType\\.SELL\" tests/test_execution/ tests/test_integration/` and verify each match is either (a) testing arbitrage exit-leg behavior, (b) testing position_monitor exits, or (c) testing risk manager handling. Update plan with the list of expected hits."
+    },
+    {
+      "id": "R2-20",
+      "severity": "MINOR",
+      "category": "missing_step",
+      "description": "Plan does not capture this fix in `.claude/tasks/lessons.md` per the project convention. CLAUDE.md states 'After every correction: capture the lesson per the project's convention' and lessons.md tracks technical workflow lessons. The lesson here is non-trivial (signal-type-vs-token semantics, mapping from signal direction to OrderSide).",
+      "fix": "Add a Step 7 (or post-implementation): 'Capture lesson in .claude/tasks/lessons.md per format ~/.claude/lessons-format.md, summarizing: (1) SignalType.SELL means OrderSide.SELL on the tagged token, NOT \"opposite direction\"; (2) BUY NO is the correct way to express a bearish view; (3) value_edge.py:59-65 is the canonical pattern; (4) reference engine.py:312 for the mapping.'"
+    },
+    {
+      "id": "R2-21",
+      "severity": "MINOR",
+      "category": "incorrect_claim",
+      "description": "Step 2.1 'PRIMA' code block uses ellipsis `(... if \"yes\" ...)` and `(... if \"no\" ...)` placeholders. The actual current code at event_driven.py:97-100 and 103-106 uses full `next((o.token_id for o in market.outcomes if o.outcome.lower() == \"yes\"), market.outcomes[0].token_id if market.outcomes else \"\")`. The placeholder hides the fallback `market.outcomes[0].token_id if market.outcomes else \"\"` which is exactly the silent-fallback bug A3 is supposed to remove. Implementer working from this might miss that the fallback removal applies to event_driven too.",
+      "fix": "Expand the 'PRIMA' code block in Step 2.1 to show the literal current code so the reader can see the fallback being removed. Confirm explicitly in Step 2.1: 'Note: removes the silent fallback `market.outcomes[0].token_id if market.outcomes else \"\"` — consistent with A3.'"
+    },
+    {
+      "id": "R2-22",
+      "severity": "MINOR",
+      "category": "missing_step",
+      "description": "Plan does not specify branch-name or commit-organization. Single commit vs three commits (one per strategy)? The proposed commit message at line 346 implies one commit, but Steps 1-6 are independently testable. Three smaller commits (one per strategy + tests) would be easier to revert if an issue surfaces.",
+      "fix": "Add to 'Note implementative': 'Commit organization: single commit covering all 3 strategies + tests (atomic fix), OR three sequential commits (sentiment, event_driven, knowledge_driven) each with its tests for bisectability. Recommend single commit since all three have shared semantic.'"
+    }
+  ],
+  "summary": "Plan is structurally sound but has 4 BLOCKER issues that must be resolved before implementation: (1) resolution.py:120 has the IDENTICAL bug and is incorrectly excluded from scope, (2) the V5 grep verification will never pass because arbitrage.py legitimately emits SELL, (3) the analysis of A4 contradicts the actual code (engine.py uses abs() — no signing impact downstream), and (4) the plan acknowledges but does not adequately address the position-sizing latent bug from passing YES price for NO orders. There are also 11 MAJOR issues around test placement, downstream consumer enumeration, edge cases (multi-outcome markets, empty token_id, whitespace-padded outcome names), and ambiguous logger.info update instructions. Recommend BLOCKER fixes before round 3 merge; MAJOR fixes before implementer dispatch."
+}
