@@ -10,6 +10,7 @@ from app.core.yaml_config import app_config
 if TYPE_CHECKING:
     from app.clients.polymarket_subgraph import PolymarketSubgraphClient
     from app.execution.engine import ExecutionEngine
+    from app.execution.trade_store import TradeStore
     from app.knowledge.risk_kb import RiskKnowledgeBase
     from app.risk.circuit_breaker import CircuitBreaker
     from app.risk.manager import RiskManager
@@ -37,6 +38,7 @@ _risk_manager: RiskManager | None = None
 _circuit_breaker: CircuitBreaker | None = None
 _strategy_registry: StrategyRegistry | None = None
 _value_engine: ValueAssessmentEngine | None = None
+_trade_store: TradeStore | None = None
 _execution_engine: ExecutionEngine | None = None
 _bot_service: BotService | None = None
 _manifold_service: ManifoldService | None = None
@@ -261,20 +263,34 @@ async def get_value_engine() -> ValueAssessmentEngine:
     return _value_engine
 
 
+async def get_trade_store() -> TradeStore:
+    """Get the TradeStore singleton (Slice 2 / N2 extraction).
+
+    Constructed and initialised on first call; returned as-is on subsequent
+    calls. Accessible without going through ``get_execution_engine`` so the
+    intelligence scheduler can wire orchestrators in monitoring-only mode.
+    """
+    global _trade_store  # noqa: PLW0603
+    if _trade_store is None:
+        from app.execution.trade_store import TradeStore
+
+        _trade_store = TradeStore()
+        await _trade_store.init()
+    return _trade_store
+
+
 async def get_execution_engine() -> ExecutionEngine:
     global _execution_engine  # noqa: PLW0603
     if _execution_engine is None:
         from app.clients.polymarket_clob import PolymarketClobClient
         from app.execution.dry_run import DryRunExecutor
         from app.execution.engine import ExecutionEngine
-        from app.execution.trade_store import TradeStore
 
         clob = PolymarketClobClient()
         executor = DryRunExecutor(clob)
         value_engine = await get_value_engine()
         manifold_service = await get_manifold_service()
-        store = TradeStore()
-        await store.init()
+        store = await get_trade_store()
 
         # Intelligence orchestrator: only if GDELT or RSS is enabled
         intel_orch = None
@@ -385,21 +401,25 @@ async def start_intelligence_scheduler() -> IntelligenceScheduler:
     # Wire market service (whale loop needs the active universe)
     scheduler.set_market_service(get_market_service())
 
+    # Slice 2 / N2: TradeStore singleton is now independent of the engine —
+    # build/return it eagerly so orchestrators always wire the same instance.
+    store = await get_trade_store()
+
     # Wire orchestrators conditionally — same gating as get_execution_engine
     if app_config.intelligence.whale.enabled:
         whale_orch = get_whale_orchestrator()
-        # Trade store is wired lazily in get_execution_engine; if the engine
-        # has not been built yet the scheduler still works (the orchestrator
-        # falls back to in-memory state).
+        await whale_orch.set_trade_store(store)
         scheduler.set_whale_orchestrator(whale_orch)
 
     if app_config.intelligence.popular_markets.enabled:
-        scheduler.set_popular_markets_orchestrator(
-            get_popular_markets_orchestrator()
-        )
+        pop_orch = get_popular_markets_orchestrator()
+        await pop_orch.set_trade_store(store)
+        scheduler.set_popular_markets_orchestrator(pop_orch)
 
     if app_config.intelligence.leaderboard.enabled:
-        scheduler.set_leaderboard_orchestrator(get_leaderboard_orchestrator())
+        lb_orch = get_leaderboard_orchestrator()
+        await lb_orch.set_trade_store(store)
+        scheduler.set_leaderboard_orchestrator(lb_orch)
 
     if app_config.dss.snapshot_writer.enabled:
         snapshot_writer = get_snapshot_writer()
@@ -413,12 +433,9 @@ async def start_intelligence_scheduler() -> IntelligenceScheduler:
         # Engine: only propagate if already built — do NOT force-construct.
         if _execution_engine is not None:
             snapshot_writer.set_engine(_execution_engine)
-            # TradeStore is built inside get_execution_engine; if engine
-            # exists, propagate its store. Otherwise skip (writer
-            # tolerates None — independent store construction is N2/Slice 2).
-            store = getattr(_execution_engine, "_store", None)
-            if store is not None:
-                snapshot_writer.set_trade_store(store)
+        # Slice 2 / N2: TradeStore is now an independent DI singleton, so we
+        # always have a real store to wire (no engine/None fallback).
+        snapshot_writer.set_trade_store(store)
         if app_config.intelligence.whale.enabled:
             snapshot_writer.set_whale_orchestrator(get_whale_orchestrator())
         if app_config.intelligence.popular_markets.enabled:

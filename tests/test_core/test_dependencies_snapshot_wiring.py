@@ -45,6 +45,15 @@ from app.core.yaml_config import app_config
 
 # Names of the module-level singletons in app.core.dependencies that the
 # scheduler-wiring path touches. Reset between tests for full isolation.
+#
+# Slice 2 (N2) additions:
+#   - ``_trade_store``: the new module-global singleton holder introduced by
+#     ``get_trade_store()``. Must reset to None so each test observes a fresh
+#     construction path through the dual-order singleton-identity invariant.
+#   - ``_execution_engine``: the engine caches ``_store``; if a previous test
+#     left an engine populated, a later test asserting identity against
+#     ``await get_trade_store()`` would see a stale store. Reset is mandatory
+#     for the dual-order parametrization to be meaningful.
 _SINGLETON_NAMES: tuple[str, ...] = (
     "_intelligence_scheduler",
     "_snapshot_writer",
@@ -53,6 +62,8 @@ _SINGLETON_NAMES: tuple[str, ...] = (
     "_leaderboard_orchestrator",
     "_market_service",
     "_subgraph_client",
+    "_trade_store",
+    "_execution_engine",
 )
 
 
@@ -195,4 +206,80 @@ async def test_snapshot_wiring_skipped_when_intel_flags_off(
             "intelligence.leaderboard.enabled=False"
         )
     finally:
+        await deps.stop_intelligence_scheduler()
+
+
+# ── Slice 2 / N2: dual-order singleton-identity invariant ────────────────────
+
+
+@pytest.mark.parametrize("init_order", ["scheduler_first", "engine_first"])
+async def test_trade_store_singleton_identity_dual_order_init(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_singletons: Any,
+    init_order: str,
+) -> None:
+    """TradeStore singleton identity must hold under both bootstrap orders.
+
+    Phase 13 W5 Slice 2 (N2) demo gate (anchor "Demo gate semantics" point 2):
+    no matter whether ``start_intelligence_scheduler()`` runs before or after
+    ``get_execution_engine()``, the SAME ``TradeStore`` instance must be
+    visible from:
+
+        get_trade_store()
+        engine._store                 (ExecutionEngine ctor stores trade_store as _store)
+        whale_orch._trade_store       (set via WhaleOrchestrator.set_trade_store)
+        snapshot_writer._trade_store  (set via SnapshotWriter.set_trade_store)
+
+    Identity, not equality — module globals must hold the EXACT same object,
+    otherwise dual-write races (engine appends to one store, scheduler reads
+    from another) would silently corrupt DSS snapshots.
+    """
+    # Monitoring-only is irrelevant for engine_first (we explicitly build it),
+    # but keep auto_start=False so no background lifespan task fires.
+    monkeypatch.setattr(app_config.bot, "auto_start", False)
+
+    # All flags ON so every wiring branch fires in both orderings.
+    monkeypatch.setattr(app_config.intelligence.whale, "enabled", True)
+    monkeypatch.setattr(app_config.intelligence.popular_markets, "enabled", True)
+    monkeypatch.setattr(app_config.intelligence.leaderboard, "enabled", True)
+    monkeypatch.setattr(app_config.dss.snapshot_writer, "enabled", True)
+    monkeypatch.setattr(app_config.intelligence.scheduler, "enabled", True)
+
+    try:
+        if init_order == "scheduler_first":
+            # Scheduler boots → wires whale_orch + snapshot_writer with the
+            # store from get_trade_store(). Engine then runs and must adopt
+            # the SAME store rather than constructing a fresh one.
+            await deps.start_intelligence_scheduler()
+            engine = await deps.get_execution_engine()
+        else:  # engine_first
+            # Engine boots first → ``get_execution_engine`` must call
+            # ``get_trade_store()`` (instead of constructing TradeStore
+            # inline). Scheduler then runs and must reuse the same singleton
+            # for snapshot_writer wiring.
+            engine = await deps.get_execution_engine()
+            await deps.start_intelligence_scheduler()
+
+        store_singleton = await deps.get_trade_store()
+        whale_orch = deps.get_whale_orchestrator()
+        snapshot_writer = deps.get_snapshot_writer()
+
+        # ExecutionEngine.__init__ stores the trade_store kwarg as
+        # ``self._store`` (see app/execution/engine.py line 90). Verified
+        # against the constructor in the Slice 1 implementer's note.
+        assert store_singleton is engine._store, (
+            f"[{init_order}] engine._store must be the get_trade_store() singleton; "
+            f"got id(store_singleton)={id(store_singleton)} "
+            f"vs id(engine._store)={id(engine._store)}"
+        )
+        assert store_singleton is whale_orch._trade_store, (
+            f"[{init_order}] whale_orch._trade_store must be the singleton"
+        )
+        assert store_singleton is snapshot_writer._trade_store, (
+            f"[{init_order}] snapshot_writer._trade_store must be the singleton"
+        )
+    finally:
+        # Mirror Slice 1 cleanup: stop scheduler so its loops do not leak
+        # into subsequent tests. The fixture also resets module globals on
+        # teardown — this stop() is the symmetric counterpart to start().
         await deps.stop_intelligence_scheduler()
