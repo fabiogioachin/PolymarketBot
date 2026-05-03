@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from app.core.logging import get_logger
 from app.models.knowledge import KnowledgeContext, PatternMatch
@@ -19,7 +20,7 @@ class KnowledgeDrivenStrategy:
     A pattern must clear both MIN_MATCH_SCORE and MIN_PATTERN_CONFIDENCE to
     be considered "strong". If any strong pattern exists, the strategy
     weighs the knowledge composite_signal against the valuation direction
-    and emits a BUY, SELL, or HOLD signal.
+    and emits a BUY signal on YES (bullish) or NO (bearish) token.
     """
 
     MIN_MATCH_SCORE: float = 0.4
@@ -74,8 +75,8 @@ class KnowledgeDrivenStrategy:
         composite_signal = knowledge.composite_signal
         edge = valuation.fee_adjusted_edge
 
-        signal_type = self._resolve_signal_type(composite_signal, edge)
-        if signal_type is None:
+        target_outcome = self._resolve_target_outcome(composite_signal, edge)
+        if target_outcome is None:
             logger.debug(
                 "knowledge_driven: signal and edge disagree — no trade",
                 market_id=market.id,
@@ -84,14 +85,25 @@ class KnowledgeDrivenStrategy:
             )
             return None
 
-        token_id = self._pick_token(market, signal_type)
+        token_id = self._pick_token(market, target_outcome)
+        if not token_id:
+            logger.debug(
+                "knowledge_driven: target outcome not found or empty token_id — skip",
+                market_id=market.id,
+                target_outcome=target_outcome,
+            )
+            return None
+
         knowledge_sources = [pm.pattern.name for pm in strong_patterns if pm.pattern.name]
         reasoning = self._build_reasoning(strong_patterns, composite_signal, edge)
+
+        yes_price = valuation.market_price
+        market_price = yes_price if target_outcome == "yes" else 1.0 - yes_price
 
         logger.info(
             "knowledge_driven: signal generated",
             market_id=market.id,
-            signal_type=signal_type,
+            target_outcome=target_outcome,
             composite_signal=composite_signal,
             confidence=composite_confidence,
             patterns=knowledge_sources,
@@ -101,9 +113,9 @@ class KnowledgeDrivenStrategy:
             strategy=self.name,
             market_id=market.id,
             token_id=token_id,
-            signal_type=signal_type,
+            signal_type=SignalType.BUY,
             confidence=composite_confidence,
-            market_price=valuation.market_price,
+            market_price=market_price,
             edge_amount=edge,
             reasoning=reasoning,
             knowledge_sources=knowledge_sources,
@@ -125,29 +137,24 @@ class KnowledgeDrivenStrategy:
         # Scale by the overall knowledge confidence (0-1)
         return round(min(1.0, avg * max(knowledge_confidence, 0.5)), 4)
 
-    def _resolve_signal_type(
+    def _resolve_target_outcome(
         self,
         composite_signal: float,
         edge: float,
-    ) -> SignalType | None:
-        """Emit BUY/SELL only when composite signal and valuation edge agree."""
+    ) -> Literal["yes", "no"] | None:
+        """Return the target outcome for a BUY signal, or None if no signal."""
         if composite_signal > 0 and edge > 0:
-            return SignalType.BUY
+            return "yes"
         if composite_signal < 0 and edge < 0:
-            return SignalType.SELL
+            return "no"
         return None  # disagreement → no trade
 
-    def _pick_token(self, market: Market, signal_type: SignalType) -> str:
-        """Return the appropriate token_id for the signal direction."""
-        if signal_type == SignalType.BUY:
-            return next(
-                (o.token_id for o in market.outcomes if o.outcome.lower() == "yes"),
-                market.outcomes[0].token_id if market.outcomes else "",
-            )
-        return next(
-            (o.token_id for o in market.outcomes if o.outcome.lower() == "no"),
-            market.outcomes[0].token_id if market.outcomes else "",
-        )
+    def _pick_token(self, market: Market, outcome_name: Literal["yes", "no"]) -> str | None:
+        """Return the token_id matching outcome_name (case/whitespace-insensitive)."""
+        for o in market.outcomes:
+            if o.outcome.strip().lower() == outcome_name:
+                return o.token_id or None
+        return None
 
     def _build_reasoning(
         self,

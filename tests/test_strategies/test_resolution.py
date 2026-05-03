@@ -172,12 +172,12 @@ async def test_buy_signal_reasoning_contains_key_fields() -> None:
     assert "days_left=" in signal.reasoning
 
 
-# ── SELL signals ──────────────────────────────────────────────────────────────
+# ── BUY NO signals (low probability → buy NO token) ──────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_sell_signal_low_probability_market() -> None:
-    """fair_value=0.10, yes_price=0.85 → NO is mispriced, buy NO (SELL signal)."""
+async def test_buy_no_signal_low_probability_market() -> None:
+    """fair_value=0.10, yes_price=0.85 → NO is mispriced, buy NO (BUY on NO token)."""
     strategy = ResolutionStrategy()
     # yes_price=0.85 → no_price=0.15; expected_no_value=0.90; discount=0.75
     market = _make_market(days_from_now=7, yes_price=0.85, fee_rate=0.0)
@@ -186,14 +186,15 @@ async def test_sell_signal_low_probability_market() -> None:
     signal = await strategy.evaluate(market, valuation)
 
     assert signal is not None
-    assert signal.signal_type == SignalType.SELL
+    assert signal.signal_type == SignalType.BUY
     assert signal.strategy == "resolution"
     assert signal.token_id == "no-tok"
     assert signal.edge_amount > 0
+    assert signal.market_price == pytest.approx(1.0 - 0.85)
 
 
 @pytest.mark.asyncio
-async def test_sell_signal_reasoning_contains_key_fields() -> None:
+async def test_buy_no_signal_reasoning_contains_key_fields() -> None:
     strategy = ResolutionStrategy()
     market = _make_market(days_from_now=5, yes_price=0.85, fee_rate=0.0)
     valuation = _make_valuation(fair_value=0.10, market_price=0.85)
@@ -203,6 +204,41 @@ async def test_sell_signal_reasoning_contains_key_fields() -> None:
     assert signal is not None
     assert "fair_value=0.10" in signal.reasoning
     assert "days_left=" in signal.reasoning
+
+
+@pytest.mark.asyncio
+async def test_skips_signal_when_no_outcome_missing() -> None:
+    """Low-probability market without 'No' outcome → skip signal."""
+    strategy = ResolutionStrategy()
+    market = _make_market(
+        days_from_now=7,
+        yes_price=0.85,
+        fee_rate=0.0,
+        outcomes=[Outcome(token_id="yes-tok", outcome="Yes", price=0.85)],
+    )
+    valuation = _make_valuation(fair_value=0.10, market_price=0.85)
+
+    signal = await strategy.evaluate(market, valuation)
+    assert signal is None
+
+
+@pytest.mark.asyncio
+async def test_skips_signal_when_no_token_id_empty() -> None:
+    """Low-probability market with 'No' outcome but empty token_id → skip signal (no fallback)."""
+    strategy = ResolutionStrategy()
+    market = _make_market(
+        days_from_now=7,
+        yes_price=0.85,
+        fee_rate=0.0,
+        outcomes=[
+            Outcome(token_id="yes-tok", outcome="Yes", price=0.85),
+            Outcome(token_id="", outcome="No", price=0.15),
+        ],
+    )
+    valuation = _make_valuation(fair_value=0.10, market_price=0.85)
+
+    signal = await strategy.evaluate(market, valuation)
+    assert signal is None
 
 
 # ── Time weight: confidence comparison ────────────────────────────────────────

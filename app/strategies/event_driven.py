@@ -1,6 +1,7 @@
 """Event Driven strategy — trades on events detected by the intelligence pipeline."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from app.core.logging import get_logger
 from app.models.knowledge import KnowledgeContext, PatternMatch
@@ -92,18 +93,28 @@ class EventDrivenStrategy:
             )
             return None
 
+        target_outcome: Literal["yes", "no"] | None
         if combined_edge > 0:
-            signal_type = SignalType.BUY
-            token_id = next(
-                (o.token_id for o in market.outcomes if o.outcome.lower() == "yes"),
-                market.outcomes[0].token_id if market.outcomes else "",
-            )
+            target_outcome = "yes"
+        elif combined_edge < 0:
+            target_outcome = "no"
         else:
-            signal_type = SignalType.SELL
-            token_id = next(
-                (o.token_id for o in market.outcomes if o.outcome.lower() == "no"),
-                market.outcomes[0].token_id if market.outcomes else "",
+            return None
+
+        token_id = next(
+            (o.token_id for o in market.outcomes if o.outcome.strip().lower() == target_outcome),
+            None,
+        )
+        if not token_id:
+            logger.debug(
+                "event_driven: target outcome not found or empty token_id — skip",
+                market_id=market.id,
+                target_outcome=target_outcome,
             )
+            return None
+
+        yes_price = valuation.market_price
+        market_price = yes_price if target_outcome == "yes" else 1.0 - yes_price
 
         knowledge_sources = [pm.pattern.name for pm in patterns if pm.pattern.name]
 
@@ -119,7 +130,7 @@ class EventDrivenStrategy:
         logger.info(
             "event_driven: signal generated",
             market_id=market.id,
-            signal_type=signal_type,
+            target_outcome=target_outcome,
             combined_edge=combined_edge,
             fresh_event=fresh,
             patterns=len(patterns),
@@ -129,9 +140,9 @@ class EventDrivenStrategy:
             strategy=self.name,
             market_id=market.id,
             token_id=token_id,
-            signal_type=signal_type,
+            signal_type=SignalType.BUY,
             confidence=adjusted_confidence,
-            market_price=valuation.market_price,
+            market_price=market_price,
             edge_amount=combined_edge,
             reasoning=reasoning,
             knowledge_sources=knowledge_sources,

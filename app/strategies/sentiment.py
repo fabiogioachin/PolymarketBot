@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from app.core.logging import get_logger
 from app.models.knowledge import KnowledgeContext
@@ -22,8 +23,8 @@ class SentimentStrategy:
     and the sentiment shift is strong enough.
     """
 
-    TONE_SHIFT_THRESHOLD: float = 1.5   # minimum |composite_signal| to act on
-    MIN_VOLUME_RATIO: float = 1.5        # placeholder — can be enriched when volume data flows in
+    TONE_SHIFT_THRESHOLD: float = 1.5  # minimum |composite_signal| to act on
+    MIN_VOLUME_RATIO: float = 1.5  # placeholder — can be enriched when volume data flows in
 
     def __init__(self) -> None:
         # Baseline tone per domain — updated by upstream intelligence layer
@@ -48,12 +49,13 @@ class SentimentStrategy:
         valuation: ValuationResult,
         knowledge: KnowledgeContext | None = None,
     ) -> Signal | None:
-        """Return a BUY/SELL signal when sentiment and valuation edge agree.
+        """Return a BUY signal (on YES or NO token) when sentiment and edge agree.
 
         The sentiment proxy is knowledge.composite_signal (range -1 to +1).
         The shift magnitude is compared to TONE_SHIFT_THRESHOLD; if the raw
         signal is too weak, no trade is emitted. Direction must match the
-        valuation fee_adjusted_edge for a signal to be produced.
+        valuation fee_adjusted_edge for a signal to be produced. Bearish
+        intent emits BUY on the NO token (not SELL on YES).
         """
         if not knowledge:
             logger.debug("sentiment: no knowledge context", market_id=market.id)
@@ -76,13 +78,22 @@ class SentimentStrategy:
             )
             return None
 
-        signal_type = self._resolve_signal_type(sentiment, edge)
-        if signal_type is None:
+        target_outcome = self._resolve_target_outcome(sentiment, edge)
+        if target_outcome is None:
             logger.debug(
                 "sentiment: sentiment and edge disagree — no trade",
                 market_id=market.id,
                 sentiment=sentiment,
                 edge=edge,
+            )
+            return None
+
+        token_id = self._pick_token(market, target_outcome)
+        if not token_id:
+            logger.debug(
+                "sentiment: target outcome not found or empty token_id — skip",
+                market_id=market.id,
+                target_outcome=target_outcome,
             )
             return None
 
@@ -93,7 +104,6 @@ class SentimentStrategy:
             4,
         )
 
-        token_id = self._pick_token(market, signal_type)
         domain_tag = knowledge.domain or market.category.value
 
         # Adjust for baseline if available
@@ -108,10 +118,13 @@ class SentimentStrategy:
             f"aligns with fee-adjusted edge {edge:+.3f}.{baseline_note}"
         )
 
+        yes_price = valuation.market_price
+        market_price = yes_price if target_outcome == "yes" else 1.0 - yes_price
+
         logger.info(
             "sentiment: signal generated",
             market_id=market.id,
-            signal_type=signal_type,
+            target_outcome=target_outcome,
             sentiment=sentiment,
             edge=edge,
             confidence=confidence,
@@ -121,9 +134,9 @@ class SentimentStrategy:
             strategy=self.name,
             market_id=market.id,
             token_id=token_id,
-            signal_type=signal_type,
+            signal_type=SignalType.BUY,
             confidence=confidence,
-            market_price=valuation.market_price,
+            market_price=market_price,
             edge_amount=edge,
             reasoning=reasoning,
             timestamp=datetime.now(UTC),
@@ -131,25 +144,20 @@ class SentimentStrategy:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _resolve_signal_type(
+    def _resolve_target_outcome(
         self,
         sentiment: float,
         edge: float,
-    ) -> SignalType | None:
-        """Emit only when sentiment and edge directions agree."""
+    ) -> Literal["yes", "no"] | None:
+        """Return the target outcome for a BUY signal, or None if no signal."""
         if sentiment > 0 and edge > 0:
-            return SignalType.BUY
+            return "yes"
         if sentiment < 0 and edge < 0:
-            return SignalType.SELL
+            return "no"
         return None
 
-    def _pick_token(self, market: Market, signal_type: SignalType) -> str:
-        if signal_type == SignalType.BUY:
-            return next(
-                (o.token_id for o in market.outcomes if o.outcome.lower() == "yes"),
-                market.outcomes[0].token_id if market.outcomes else "",
-            )
-        return next(
-            (o.token_id for o in market.outcomes if o.outcome.lower() == "no"),
-            market.outcomes[0].token_id if market.outcomes else "",
-        )
+    def _pick_token(self, market: Market, outcome_name: Literal["yes", "no"]) -> str | None:
+        for o in market.outcomes:
+            if o.outcome.strip().lower() == outcome_name:
+                return o.token_id or None
+        return None

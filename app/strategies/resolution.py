@@ -16,15 +16,15 @@ class ResolutionStrategy:
 
     Logic:
     - Market must have an end_date within MAX_DAYS_TO_RESOLUTION days
-    - ValuationResult fair_value must be high (>= HIGH_PROB_THRESHOLD for BUY)
-      or low (<= LOW_PROB_THRESHOLD for SELL via NO)
+    - ValuationResult fair_value must be high (>= HIGH_PROB_THRESHOLD → BUY YES)
+      or low (<= LOW_PROB_THRESHOLD → BUY NO)
     - Market price must be discounted: price < fair_value - min_discount
     - Fee-aware: only trade if profit > fee
     """
 
     # Thresholds
-    HIGH_PROB_THRESHOLD: float = 0.85  # fair_value must be >= this for BUY
-    LOW_PROB_THRESHOLD: float = 0.15  # fair_value must be <= this for SELL
+    HIGH_PROB_THRESHOLD: float = 0.85  # fair_value must be >= this for BUY YES
+    LOW_PROB_THRESHOLD: float = 0.15  # fair_value must be <= this for BUY NO
     MIN_DISCOUNT: float = 0.03  # minimum price discount to bother (3 cents)
     MAX_DAYS_TO_RESOLUTION: float = 14.0  # only consider markets resolving within N days
 
@@ -96,7 +96,7 @@ class ResolutionStrategy:
                         ),
                     )
 
-        # 4. Check SELL condition (buy NO): low probability, overpriced YES
+        # 4. Check BUY-NO condition: low probability, overpriced YES
         if fair_value <= self.LOW_PROB_THRESHOLD:
             no_price = 1.0 - yes_price  # approximate NO price
             expected_no_value = 1.0 - fair_value
@@ -104,9 +104,16 @@ class ResolutionStrategy:
             if discount >= self.MIN_DISCOUNT:
                 profit = discount - market.fee_rate
                 if profit > 0:
+                    no_token_id = self._get_no_token(market)
+                    if not no_token_id:
+                        logger.debug(
+                            "resolution: NO outcome not found or empty token_id — skip",
+                            market_id=market.id,
+                        )
+                        return None
                     confidence = min(0.95, valuation.confidence * time_weight)
                     logger.info(
-                        "resolution: SELL signal (buy NO)",
+                        "resolution: BUY NO signal",
                         market_id=market.id,
                         fair_value=fair_value,
                         yes_price=yes_price,
@@ -116,10 +123,10 @@ class ResolutionStrategy:
                     return Signal(
                         strategy=self.name,
                         market_id=market.id,
-                        token_id=self._get_no_token(market),
-                        signal_type=SignalType.SELL,
+                        token_id=no_token_id,
+                        signal_type=SignalType.BUY,
                         confidence=confidence,
-                        market_price=valuation.market_price,
+                        market_price=1.0 - valuation.market_price,
                         edge_amount=round(profit, 4),
                         reasoning=(
                             f"Resolution hunt (NO): fair_value={fair_value:.2f}, "
@@ -138,20 +145,20 @@ class ResolutionStrategy:
     @staticmethod
     def _get_yes_price(market: Market) -> float:
         for o in market.outcomes:
-            if o.outcome.lower() == "yes":
+            if o.outcome.strip().lower() == "yes":
                 return o.price
         return 0.5
 
     @staticmethod
     def _get_yes_token(market: Market) -> str:
         for o in market.outcomes:
-            if o.outcome.lower() == "yes":
+            if o.outcome.strip().lower() == "yes":
                 return o.token_id
         return ""
 
     @staticmethod
-    def _get_no_token(market: Market) -> str:
+    def _get_no_token(market: Market) -> str | None:
         for o in market.outcomes:
-            if o.outcome.lower() == "no":
-                return o.token_id
-        return ""
+            if o.outcome.strip().lower() == "no":
+                return o.token_id or None
+        return None

@@ -149,11 +149,11 @@ async def test_buy_signal_token_id_is_yes() -> None:
     assert signal.token_id == "t1"  # YES outcome
 
 
-# ── SELL signal ───────────────────────────────────────────────────────────────
+# ── BUY NO signal (bearish intent) ────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_sell_signal_with_negative_composite_and_edge() -> None:
+async def test_buy_no_signal_with_negative_composite_and_edge() -> None:
     strategy = EventDrivenStrategy()
     market = _make_market()
     valuation = _make_valuation(fee_adjusted_edge=-0.10, confidence=0.6)
@@ -162,8 +162,52 @@ async def test_sell_signal_with_negative_composite_and_edge() -> None:
     signal = await strategy.evaluate(market, valuation, knowledge)
 
     assert signal is not None
-    assert signal.signal_type == SignalType.SELL
+    assert signal.signal_type == SignalType.BUY
     assert signal.token_id == "t2"  # NO outcome
+    assert signal.edge_amount < 0
+
+
+@pytest.mark.asyncio
+async def test_skips_signal_when_no_outcome_missing() -> None:
+    """Market without 'No' outcome → BUY NO signal must be skipped (no fallback)."""
+    strategy = EventDrivenStrategy()
+    market = _make_market(outcomes=[Outcome(token_id="t1", outcome="Yes", price=0.60)])
+    valuation = _make_valuation(fee_adjusted_edge=-0.10, confidence=0.6)
+    knowledge = _make_knowledge(composite_signal=-0.6, confidence=0.7)
+
+    assert await strategy.evaluate(market, valuation, knowledge) is None
+
+
+@pytest.mark.asyncio
+async def test_skips_signal_when_no_token_id_empty() -> None:
+    """Outcome 'No' with empty token_id → skip signal."""
+    strategy = EventDrivenStrategy()
+    market = _make_market(
+        outcomes=[
+            Outcome(token_id="t1", outcome="Yes", price=0.60),
+            Outcome(token_id="", outcome="No", price=0.40),
+        ]
+    )
+    valuation = _make_valuation(fee_adjusted_edge=-0.10, confidence=0.6)
+    knowledge = _make_knowledge(composite_signal=-0.6, confidence=0.7)
+
+    assert await strategy.evaluate(market, valuation, knowledge) is None
+
+
+@pytest.mark.asyncio
+async def test_buy_no_signal_market_price_equals_no_price() -> None:
+    """For BUY-NO, market_price must be 1.0 - YES_price (the actual NO book price)."""
+    strategy = EventDrivenStrategy()
+    market = _make_market()
+    yes_price = 0.60
+    valuation = _make_valuation(fee_adjusted_edge=-0.10, confidence=0.6, market_price=yes_price)
+    knowledge = _make_knowledge(composite_signal=-0.6, confidence=0.7)
+
+    signal = await strategy.evaluate(market, valuation, knowledge)
+
+    assert signal is not None
+    assert signal.signal_type == SignalType.BUY
+    assert signal.market_price == pytest.approx(1.0 - yes_price)
 
 
 # ── HOLD / None ───────────────────────────────────────────────────────────────

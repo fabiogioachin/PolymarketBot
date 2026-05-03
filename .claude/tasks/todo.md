@@ -1,163 +1,163 @@
-# PolymarketBot — Development Tracker
+# PolymarketBot — Task Tracker
 
-> Autonomous intelligence + value assessment system for Polymarket
-> Stack: Python 3.11, FastAPI, Pydantic v2, httpx, aiosqlite, scikit-learn
-> Capital: 150 EUR | 11 VAE signals (post-S4b) | 7 strategies | 9 project skills
-
-## Phase 13 — Dynamic Edge & Platform Intelligence
-
-> Volatility-aware edge + Polymarket platform collectors (trades/popular/leaderboard) + on-chain subgraph + whale/insider VAE signals + standalone DSS artifact.
-> Master decisions: [.claude/plans/phase-13/00-decisions.md](.claude/plans/phase-13/00-decisions.md)
-
-### Wave schedule
-
-| Wave | Sessioni | Status |
-|------|----------|--------|
-| W1 | S1 Dynamic edge | [x] 2026-04-24 |
-| W2 | S2 Collectors (trades, popular, leaderboard) | [x] 2026-04-24 |
-| W3 | S3 Subgraph client | [x] 2026-04-24 |
-| W4 | S4a Snapshot writer + Docker profiles // S4b Whale/insider VAE | [x] / [x] 2026-04-24 |
-| W5 | S5a DSS artifact // S5b Dashboard widgets | [x] / [x] 2026-04-25 |
-
-### Session plans
-
-- [x] [S1 Dynamic edge](.claude/plans/phase-13/S1-dynamic-edge.md) — 10 new tests
-- [x] [S2 Collectors](.claude/plans/phase-13/S2-collectors.md) — 33 new tests
-- [x] [S3 Subgraph client](.claude/plans/phase-13/S3-subgraph.md) — 21 new tests
-- [x] [S4a Snapshot writer](.claude/plans/phase-13/S4a-snapshot-writer.md) — 9 new tests (DSS contract, atomic write, size cap)
-- [x] [S4b Whale/insider VAE](.claude/plans/phase-13/S4b-whale-insider-vae.md) — 40 new tests (whale/insider/engine integration + yaml sum validator)
-- [x] [S5a DSS artifact](.claude/plans/phase-13/S5a-dss-artifact.md) — 3 new files (`static/dss/dss.html|.js|.css`), self-contained vanilla JS, CORS direct to clob, WS reconnect-with-backoff, localStorage cache, ASCII sparkline
-- [x] [S5b Dashboard widgets](.claude/plans/phase-13/S5b-dashboard-widgets.md) — DSS link in header, whale counter tile (1h, 30s poll), Vol 1h column with sparkline + color coding, cache bust v=13→v=14, SSE payload extended (realized_volatility/price_history_60min as None/[] with TODO Phase 14: ValuationResultStore)
-
-**Baseline post-W4:** 361 pass (execution+core+valuation+services), 0 fail. W4 adds 49 tests (9 S4a + 40 S4b). Integrazione end-to-end verde: whale/insider signals via `external_signals` in VAE, DSS snapshot_writer triggered da `engine.tick()` dopo `assess_batch()`, config esteso (weights +2 @ 0.05 → nominal 1.10 / effective ~1.00 con manifold off; nuova sezione `dss.snapshot_writer`).
-
-**W4 merge orchestrator-side (post-agent):** `_last_valuations` attr + `snapshot_writer.tick()` call in `app/execution/engine.py` (import lazy per circolare), `DssSnapshotWriterConfig`/`DssConfig` in `app/core/yaml_config.py`, blocco `dss:` + pesi whale/insider in `config/config.example.yaml`. `ExecutionEngine.__init__` NON esteso con `snapshot_writer` — wired via late-binding setters in `get_execution_engine()`.
-
-**Gap tecnico pendente (azione manuale utente):** aggiungere `# THEGRAPH_API_KEY=` commentato a `.env.example`. Il hook `~/.claude/hooks/protect-critical-files.sh` blocca ogni edit automatico su `.env*` (regex cattura anche `.env.example`). Non-bloccante: client fail-soft su free tier senza var.
+> **System state (2026-04-25):** Phase 13 complete. 870+ tests passing. Python 3.11, FastAPI, Pydantic v2, 11 VAE signals, 7 strategies, 150 EUR capital (dry_run).
+> **History:** Phase 11 (trading + dashboard fixes), Phase 12 (persistence + integration tests), Phase 13 (dynamic edge, platform collectors, subgraph, whale/insider VAE, DSS artifact + dashboard widgets) — all done.
+> **Config:** secrets in `.env`, tunables in `config/config.yaml` (not in repo — use `config.example.yaml`). Singletons wired in `app/core/dependencies.py`.
 
 ---
 
-## Phase 11: Critical Bug Fixes — Trading + Dashboard (6 fixes) [DONE 2026-04-15]
+## Pending User Action (non-automatable)
 
-> Fix 6 diagnosed issues preventing the bot from placing new trades and populating Intelligence/Knowledge dashboard tabs.
-
-### Domain Analysis
-
-| Domain                                         | Independent?      | Shared State                         | Execution                |
-| ---------------------------------------------- | ----------------- | ------------------------------------ | ------------------------ |
-| Backend: Execution/Risk (Fix 1)                | yes               | --                                   | parallel                 |
-| Backend: Intelligence Pipeline (Fix 2, Fix 3)  | yes               | NewsService, GdeltClient             | single-agent (related)   |
-| Frontend: Dashboard JS/HTML (Fix 4, Fix 5)     | yes               | static/js/app.js, static/index.html  | single-agent (shared)    |
-| Backend: Risk KB Population (Fix 6)            | depends on Fix 1  | ExecutionEngine, dependencies.py     | sequential after Fix 1   |
-
-Parallel dispatch: Steps 1, 2+3, 4 run in parallel. Step 5 after Step 1. Step 6 after all. Step 7 last.
+- [ ] Add `# THEGRAPH_API_KEY=` (commented) to `.env.example` manually.
+  Hook `~/.claude/hooks/protect-critical-files.sh` regex `'/\.env(\..*)?$'` blocks all automated edits on `.env*` including `.env.example`. Non-blocking: `TheGraphClient` fails soft on free tier without the var.
 
 ---
 
-### Step 4 -- Wire Intelligence + Knowledge dashboard tabs (Fix 4 + Fix 5)
+## P0 — Bugs (fix before any new feature)
 
-**Agent:** frontend-specialist + orchestrator
-**Depends on:** --
-**Files:** `static/js/app.js`, `static/index.html`, `static/css/style.css`, `app/api/v1/intelligence.py`
-**Status:** [x] DONE
+### BUG-1: Identical consecutive bets across ticks ✅ FIXED 2026-04-25
 
-- [x] 4.1 — Added `GET /intelligence/news` endpoint (orchestrator added)
-- [x] 4.2 — Intelligence tab: dynamic HTML with `id` attributes + error banner
-- [x] 4.3 — Knowledge tab: dynamic HTML with `id` attributes + error banner
-- [x] 4.4 — `loadIntelligence()` function (watchlist, anomalies, RSS tables)
-- [x] 4.5 — `loadKnowledge()` function (strategies, risks tables)
-- [x] 4.6 — Wired into `switchTab()`
-- [x] CSS: Added `.data-table` and `.empty-state` styles
-
-**Why:** Intelligence and Knowledge tabs show only static placeholder HTML. No JS functions fetch from the existing API endpoints.
-
+**Symptom:** Bot places identical orders (same market, same side, same price) in consecutive ticks.
+**Root cause:** No dedup guard in `engine.tick()`. Strategies are stateless w.r.t. portfolio (correct), but no downstream layer enforced "non riaprire posizione già aperta sullo stesso token". `RiskManager.record_fill()` accumula esposizione, `PolymarketClobClient._add_to_position()` weighted-merge → avg_price drift; ogni fill loggato come trade separato → "open" duplicati.
+**Fix:** [engine.py:199-209](app/execution/engine.py:199) cattura `open_position_token_ids` (size > 0.001) dopo `_manage_positions`; [engine.py:233-244](app/execution/engine.py:233) droppa `SignalType.BUY` su token già held. Per-token (non per-market) per non bloccare arbitraggi multi-leg / outcome NO.
+**Tests:** [test_engine.py](tests/test_execution/test_engine.py) `TestDuplicatePositionDedup` (4 casi: dedup attivo, sanity, per-token, dust). Aggiornato `test_partial_exit_does_not_block_reevaluation` per usare `tok-fresh`. 244/244 pass su execution+risk+strategies.
+**Lesson:** `lessons.md` — 2026-04-25 BUG-1 dedup mancante.
 
 ---
 
-### Risk Parameters (unchanged from Phase 10)
+### BUG-2: `rule_edge.py` always returns BUY on negative edge ✅ FALSE POSITIVE 2026-04-26
 
-- Capitale: 150 EUR
-- Max exposure: 50% (75 EUR)
-- Budget pools: 65% short (48.75 EUR) / 25% medium (18.75 EUR) / 8% long (6 EUR) / 2% super_long (1.50 EUR)
-- Edge minimo: 3% short / 5% medium / 10% long / 15% super_long
-- Fixed fraction: 5% per trade (7.50 EUR)
-- Max concurrent positions: 25
-- Circuit breaker: 3 consecutive losses OR 15% drawdown
-- Near-resolution discount: positions < 24h + prob > 0.90 count at 50% exposure
-
----
-
-## Phase 12: Data Persistence, Integration Tests, Trading Realism (3 prompts)
-
-> Three parallel workstreams: PD (intelligence/knowledge persistence), PE (integration test suites), PF (simulated trading realism). Sourced from optimized prompts reviewed by Opus.
-
-### Domain Analysis
-
-| Domain | Independent? | Shared State | Execution |
-|--------|-------------|-------------|-----------|
-| PD: Intelligence/Knowledge persistence | no (PE depends on PD) | `intelligence_orchestrator.py`, `dependencies.py`, `knowledge.py` | sequential before PE |
-| PE: Integration tests | depends on PD | reads (not writes) engine, VAE, KB | sequential after PD |
-| PF: Simulated trading realism | yes | `polymarket_clob.py`, `engine.py` (different sections than PD), `dashboard.py` | parallel with PD |
-
-**Dependency graph:**
-- PD Fix 3 modifies `intelligence_orchestrator.py` (adds `trade_store` param) and `dependencies.py` (passes `trade_store` to orchestrator). PE Suite 2 tests mock `IntelligenceOrchestrator` — must read the updated constructor signature.
-- PF touches `engine.py` lines 420-470 (position management/P&L) and `polymarket_clob.py`. PD touches `engine.py` zero lines directly (only `knowledge.py` and `intelligence_orchestrator.py`). No file overlap with PF.
-- PE is test-only (new files in `tests/test_integration/`). No overlap with PD or PF file writes.
-
-**Parallel dispatch strategy:**
-- Wave 1: PD (Steps 1-3) and PF (Steps 4-6) run in parallel — zero shared files
-- Wave 2: PE (Steps 7-9) runs after PD completes — needs updated `IntelligenceOrchestrator` constructor
-- Wave 3: Step 10 (verification) runs after all complete
+**Verified:** Bug doesn't exist. `rule_edge.py:128-140` already implements the value_edge pattern: `edge > 0` → BUY YES, `edge < 0` → BUY NO. Confirmed via `git log -p` (this is the original implementation from initial commit, never broken). The earlier ticket misread line 136 (`signal_type = SignalType.BUY` inside the negative-edge branch) without seeing the adjacent token_id swap on lines 137-140.
+**Action taken 2026-04-26:**
+- Renamed misleading test `test_sell_signal_when_negative_edge_with_clear_rules` → `test_buy_no_token_when_negative_edge_with_clear_rules` (the test name said "sell" but the assertions verify BUY-NO).
+- Strengthened assertions: `edge_amount` preservation, confidence boost/penalty under clear/ambiguous rules.
+- Added `test_buy_no_token_when_negative_edge_with_ambiguous_rules` for completeness.
+**Tests:** 12/12 in `test_rule_edge.py`, 245/245 across strategies+execution+risk.
+**Related (out of scope):** Both `rule_edge` and `value_edge` set `Signal.market_price = valuation.market_price` (YES price) even when emitting on the NO token. Engine uses `signal.market_price` directly as the order price ([engine.py:294,316](app/execution/engine.py:294)). On a BUY-NO order this places the order at the YES price (~0.6 → buy NO at 0.6, when NO actually trades at ~0.4). This is a *separate* systemic issue affecting both strategies — file as a new ticket if confirmed by trade-log audit. Keeping out of BUG-2 scope per spec ("mirror value_edge.py pattern").
 
 ---
 
-### Step 1 — PD Fix 1: Knowledge debug endpoint
+## P1 — Investigation + Fix: Edge near-zero in practice ✅ FIXED 2026-04-27
 
-**Agent:** backend-specialist
-**Depends on:** --
-**Domain:** PD
-**Files:**
-- MODIFY: `app/api/v1/knowledge.py` — add `GET /knowledge/debug` endpoint
-- READ: `app/knowledge/risk_kb.py` — call `get_all()` count
-- READ: `app/core/dependencies.py` — access `get_intelligence_orchestrator()`
-- READ: `app/services/knowledge_service.py` — pattern folder enumeration
-**Skills:** `api-dashboard`, `intelligence-source`
-**Status:** [x] DONE
+**Hypothesis confirmed empirically.** Diagnostic in [scripts/debug_edge_zero.py](scripts/debug_edge_zero.py): on a sparse-data market (price 0.60, no orderbook, no history, empty resolution DB) the engine produced `fair_value=0.59`, `edge=-0.01` — only `base_rate` fired, contributing `-0.01` because its old shrinkage formula returned `0.10 * 0.5 + 0.90 * market_price = 0.59` (anchored).
 
-- [x] 1.1-1.4 — Debug endpoint implemented + 4 tests in `tests/test_api/test_knowledge.py`
+**Per-signal behavior (pre-fix audit):**
+| Signal | Behavior on missing data | Anchored? |
+|--------|--------------------------|-----------|
+| `base_rate` | `0.10*hist + 0.90*market_price` (count<5) | **YES — primary culprit** |
+| `microstructure` | `composite_score=0.0 → market_price - 0.05` (empty orderbook) | **YES — secondary** |
+| `cross_market` | `composite_signal=0.0 → market_price + 0` (no correlations) | **YES — secondary** |
+| `crowd_calibration` | `0.0` (excluded by `if != 0`) | NO ✓ |
+| `rule_analysis` | `None` (never populated in production) | NO ✓ |
+| `event_signal` | `None` (filtered by `_fetch_intelligence_signals`) | NO ✓ |
+| `pattern_kg` | `None` (filtered by `_fetch_kg_signals`) | NO ✓ |
+| `cross_platform` | `None` (Manifold disabled) | NO ✓ |
+| `whale_pressure` | `None` (filtered when `signal == 0.5`) | NO ✓ |
+| `insider_pressure` | `None` (filtered when `signal == 0.5`) | NO ✓ |
+| `temporal` | scales edge, not anchored | N/A ✓ |
+
+**Fix applied:**
+- [base_rate.py:40-58](app/valuation/base_rate.py:40) — `get_prior` now returns `Optional[float]`. Below `valuation.gating.min_base_rate_resolutions` (default 5) → `None`. Above → raw historical rate (no market_price blending; the engine's weighted average is what mixes signals).
+- [valuation/engine.py:78-90](app/valuation/engine.py:78) — `microstructure` excluded when both orderbook (no bids/asks) and history (no points) are empty. `cross_market` excluded when no correlations found.
+- [yaml_config.py:146-179](app/core/yaml_config.py:146) — new `GatingConfig` with `min_base_rate_resolutions: int = 5`, `require_cross_market_correlations: bool = True`, `require_microstructure_data: bool = True`.
+- [config/config.example.yaml:71-78](config/config.example.yaml:71) — new `valuation.gating` block documenting the knobs.
+
+**Tests:** added 7 gating regression tests in [test_engine.py:500-624](tests/test_valuation/test_engine.py:500), updated 3 base_rate tests + 1 integration test. `test_insider_pressure_signal_is_dampened` now correctly observes 0.04 delta (the actual ±0.05 cap was masked by base_rate's anchoring pre-fix). 103/103 valuation tests green.
+
+**Verification (post-fix diagnostic, [scripts/debug_edge_zero.py](scripts/debug_edge_zero.py)):** on the same sparse-data market the engine now reports honest output instead of fake-anchored output:
+| Scenario | Pre-fix | Post-fix |
+|----------|---------|----------|
+| sparse (no inputs) | `fair_value=0.59`, edge=-0.01 (anchored) | `fair_value=0.60`, edge=0.00 (no signals fire) |
+| `whale_pressure=0.85` | `fair_value=0.655`, edge=+0.055 (dampened) | `fair_value=0.85`, edge=+0.25 (full impact) |
+| `event_signal=0.40` | `fair_value=0.495`, edge=-0.105 (dampened) | `fair_value=0.40`, edge=-0.20 (full impact) |
 
 ---
 
-### Open Items from Browser Test (2026-04-15)
+## P1 — Tech Debt: SELL ≠ BUY NO (4 strategies) ✅ FIXED 2026-05-02
 
-> Risultati da `BROWSER-TEST-REPORT.md`. Il server testato era avviato prima delle fix Phase 11-12.
-> Fix code-side già applicati e testati (714 pass). Richiede restart server + re-validation browser.
+**Problem:** `sentiment`, `event_driven`, `knowledge_driven`, `resolution` emit `SignalType.SELL` on the NO token to express "buy NO" intent. The engine (`engine.py:312`) maps `SELL` → `OrderSide.SELL` on the tagged token — silently invalid in shadow/live (sells shares the bot does not own), broken P&L tracking in dry_run.
 
-- [x] **DONE (2026-04-15)**: Rebuild Docker + restart + browser re-validation post-tick-1680:
-  - `GET /api/v1/knowledge/debug` → 200, `risk_kb_rows: 5` ✅ (Phase 12 Step 1)
-  - `GET /api/v1/intelligence/news` → 200, 30 items ✅ (Phase 11 Step 4.1)
-  - Intelligence tab → chiama anomalies+watchlist+news su click, dati renderizzati ✅ (Phase 11 Step 4.6)
-  - Knowledge tab → chiama strategies+risks su click, tabelle renderizzate ✅ (Phase 11 Step 4.6)
-  - `knowledge/risks` → 5 records, `knowledge/strategies` → rule_edge/5 mercati ✅
-  - **Side-fix**: nginx `Cache-Control: no-store` per /static/ + `?v=13` su script/css in index.html (browser cached vecchio app.js dopo rebuild Docker)
-- [x] **NON-BUG (2026-04-15)**: 4 strategie inattive — by design dato infrastruttura attuale. VAE edge ~3.3% < soglia value_edge 5%. event_driven dipende da Obsidian (non seeded). arbitrage dipende da Yes+No ≠ 1.0 (Polymarket ha sum esatto). resolution richiede fair_value ≥ 0.85. Da riesaminare quando Obsidian sarà seeded.
-- [x] **NON-BUG (2026-04-15)**: knowledge/risks e knowledge/strategies vuoti — cascata da server stale pre-Phase 12. Si auto-risolve dopo restart (engine.py ha già il KB upsert per i segnali rule_edge).
+**Plan**: `.claude/plan-hardened/sell-fix/PLAN.md` (FINAL, post-`/plan-hardened` pipeline). Q1=A (resolution.py incluso, 4° strategia con stesso bug), Q2=B (`market_price = 1.0 - valuation.market_price` per BUY-NO).
+
+**Fix applied:** 4 strategies now emit `SignalType.BUY` on `token_id=NO_token` for bearish intent, with `market_price = 1.0 - valuation.market_price`. Helper `_resolve_target_outcome` returns `Literal["yes","no"] | None`; `_pick_token` removed `outcomes[0]` fallback (returns `None`); guard `if not token_id: return None` in all 4. `.strip().lower()` on outcome name matching (incluso YES helpers in `resolution.py`, allineato post-audit). 12 nuovi test + 7 rename coprono skip-no-missing, skip-empty-token (anche `test_resolution.py`, aggiunto post-audit), whitespace match, market_price=NO_price, edge_amount sign convention. Verifica empirica: V3 strategies 125/125, V4 full suite 779/1 skipped/0 failed.
+
+**Post-implementation Codex audit (2026-05-03)**: 2 gap chiusi nello stesso commit:
+- MAJOR: `test_resolution.py` mancava `test_skips_signal_when_no_token_id_empty` (asimmetria cross-file sui 4 test file — gli altri 3 ce l'avevano).
+- MINOR: `resolution.py::_get_yes_price` e `_get_yes_token` usavano `.lower()` senza `.strip()`, inconsistenti con `_get_no_token` post-fix.
+
+**Audit trail**:
+- `PLAN.md` — final implementation plan (4 strategies + 4 test files + lessons + this todo update)
+- `CHANGES-FROM-DRAFT.md` — diff Round 1 → Final con citation per ogni cambio
+- `REJECTED-SUGGESTIONS.md` — Round 3 reviewer triage (22 issues, 19 VALID, 0 false positives)
+- `.audit/` — intermediates: `PLAN.draft.md`, `PLAN.v2.md`, `CODEX-REVIEW.json`, `OPEN-AMBIGUITIES.md`, `Q2-INVESTIGATION.md`
+
+**Lesson:** `lessons.md` — 2026-05-02 SignalType.SELL semantics.
+
+**Branched workstream**: multi-alternative event selection refactor — `.claude/plan-hardened/group-refactor/PLAN.md` (separate `/plan-hardened` run). That plan declares a preflight gate that **depends on the SELL→BUY-NO fix being merged first**.
+
+### Follow-ups discovered durante il `/plan-hardened` (da pianificare separatamente)
+
+- **R2-04**: `value_edge.py:97` — fix `market_price` to `1.0 - valuation.market_price` for BUY-NO branch (consistency con post-fix sentiment/event_driven/knowledge_driven/resolution). Latent bug analogo, non incluso nello scope del fix corrente per minimal-blast-radius. Reference pattern shape resta corretto, solo `market_price` field è errato.
+- **R2-07** (BUG-3): cross-token same-market dedup guard — `engine.py:233-244` controlla solo `sig.token_id in open_position_token_ids`, non cross-token same-market. Conseguenza post-fix: il bot può aprire YES + NO sullo stesso market (hedge parziale, controproducente date le fee). Fix proposto: dedup chiave su `(market_id,)` invece di `(token_id,)` PRIMA di chiamare `risk.size_position`.
 
 ---
 
-### Open Tensions
+## P2 — Tech Debt: Silence as evidence (evidence-of-absence)
 
-| Tension | Options | Resolve When |
-|---------|---------|-------------|
-| `get_intelligence_orchestrator()` sync vs async | A: Make async (cleaner, but breaks 3+ callers). B: Keep sync + use setter `set_trade_store()` called from `get_execution_engine()` after store.init() (no caller changes). | Implementer chooses in Step 3. Option B is lower risk. Document in lessons.md. |
-| PF diagnosis scope | Some P1-P6 items may not be bugs. Diagnosis determines actual fix count. | Step 4 diagnosis determines Step 5 scope. Agent documents findings before fixing. |
+**Problem:** No GDELT news on an upcoming event → `event_signal` returns `market_price` (neutral). No whale activity → `whale_pressure` returns `0.5` (neutral). Absence of evidence should weakly push `fair_value` below `market_price`, not anchor it.
 
-### Open Questions
+**Proposed approach:**
+- `event_signal`: if query returns 0 articles AND market has been live > N days → return `market_price * decay_factor` (e.g., `* 0.95`), not `market_price`.
+- `whale_pressure`: if no whale trades in last 48h → return `0.45` (slight NO pressure), not `0.5`.
+- Make both configurable via `config.yaml` so they can be tuned/disabled.
 
-None — all three prompts are fully specified with file paths, formulas, and expected behavior.
+**Files to modify:**
+- `app/valuation/` — whichever file implements `event_signal` (likely called from `engine.py` via `intelligence_orchestrator`)
+- `app/valuation/whale_pressure.py`
+- `config/config.example.yaml` — add config keys for silence decay params
 
-### Risks
+**Done = ** on markets with zero recent activity, `fair_value` is measurably < `market_price`. Tunable via config. Tests cover silence scenario.
 
-- **PE Suite 3 numerical assertions**: If the test-writer does not read `_compute_fair_value()` carefully, assertions will have wrong expected values. The prompt explicitly warns about this but the risk remains.
-- **PD Fix 3 deserialization**: `AnomalyReport` contains `GdeltEvent` and `NewsItem` Pydantic models. Serializing to JSON and deserializing back requires careful handling of datetime fields and nested models. Test must verify round-trip fidelity.
-- **PF diagnosis may find 0 bugs**: All P1-P6 items were pre-diagnosed as "might NOT be bugs." If all are confirmed correct, Step 5 becomes a no-op and Step 6 still produces the 7 regression tests (which serve as documentation of correct behavior).
+---
+
+## P3 — New Feature: NO-hunter strategy
+
+**What:** A dedicated strategy that actively searches for overpriced YES markets (= underpriced NO). Unlike `value_edge` (which incidentally handles NO via negative edge), this strategy is explicitly optimized for:
+- Markets where the event is structurally unlikely (base_rate < 0.3, no recent GDELT, no whale momentum)
+- YES price > 0.5 (market over-assigns probability to event happening)
+- Edge on NO side > threshold
+
+**Design:**
+```python
+class NoHunterStrategy(BaseStrategy):
+    """Finds YES-overpriced markets → BUY NO."""
+    
+    def evaluate(self, market, valuation) -> Signal | None:
+        no_edge = (1.0 - valuation.fair_value) - (1.0 - market.yes_price)
+        # equivalent to: market.yes_price - valuation.fair_value
+        if no_edge > self._min_edge and market.yes_price > 0.5:
+            return Signal(
+                signal_type=SignalType.BUY,
+                token_id=market.no_token_id,
+                market_price=1.0 - market.yes_price,
+                edge_amount=no_edge,
+                ...
+            )
+```
+
+**Files to create/modify:**
+- `app/strategies/no_hunter.py` (new)
+- `app/strategies/__init__.py` — register strategy
+- `app/core/dependencies.py` — add to `StrategyRegistry`
+- `config/config.example.yaml` — add `no_hunter` strategy config block
+- `tests/test_strategies/test_no_hunter.py` (new)
+
+**Done = ** strategy registered, evaluates correctly in tick cycle, emits BUY NO signals when YES is overpriced. Tests cover positive signal, below-threshold no-signal, and no_token_id missing cases.
+
+---
+
+## Deferred (Phase 14)
+
+- **ValuationResultStore:** `realized_volatility` and `price_history_60min` in SSE payload currently return `None/[]`. Dashboard `static/dss/dss.js` and `static/js/app.js` have `// TODO Phase 14: ValuationResultStore`. Requires an in-memory or SQLite store that accumulates per-market VAE outputs over time.
+- **`record_divergence()`** not yet wired into the tick cycle. Tracks Manifold vs Polymarket price divergences to SQLite for calibration.
+- **Obsidian seeding:** `pattern_kg` signal returns `None` (weight excluded) until Obsidian vault is seeded with market patterns. `event_driven` strategy inactive for same reason. See `scripts/seed_patterns.py`.

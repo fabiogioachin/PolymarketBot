@@ -35,7 +35,7 @@
 
 ## Project Structure (`.claude/`)
 - `.claude/tasks/todo.md` — canonical project task tracker (Phase 0-10)
-- `.claude/tasks/lessons.md` — lessons learned across sessions (7 active entries)
+- `.claude/tasks/lessons.md` — lessons learned across sessions (8 active entries)
 - `.claude/skills/` — 9 project skills (see Skills section below)
 
 ## Conventions
