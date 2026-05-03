@@ -1,0 +1,17 @@
+{
+  "verdict": "CLEANUP_REQUIRED",
+  "violations": [
+    {
+      "id": "G1-01",
+      "severity": "WARNING",
+      "anchor_or_dimension": "Dimension 3 — Cleanup-debt / private attribute coupling",
+      "description": "app/core/dependencies.py:419 — `store = getattr(_execution_engine, '_store', None)` accesses the private `_store` attribute of ExecutionEngine. This was acknowledged in the Slice 1 commit body as a known limitation ('independent store construction is N2/Slice 2'). The coupling is fragile: if ExecutionEngine renames or removes `_store` the line silently returns None with no error, making snapshot_writer.set_trade_store() silently a no-op in full-bot mode too.",
+      "fix_proposed": "Slice 2 must migrate this call: after get_trade_store() is extracted as a DI singleton, replace the getattr block at app/core/dependencies.py:417-421 with `snapshot_writer.set_trade_store(get_trade_store())` (unconditional, no engine-existence guard needed because get_trade_store() constructs the singleton independently). This is option (a) from the cleanup-debt analysis."
+    }
+  ],
+  "slice_2_readiness": {
+    "current_goal_still_valid": true,
+    "recommended_goal_update": ""
+  },
+  "cleanup_recommendation": "option_a_migrate_getattr_to_singleton — once get_trade_store() is a public DI singleton (Slice 2 deliverable), replacing `getattr(_execution_engine, '_store', None)` at app/core/dependencies.py:419 with a direct `get_trade_store()` call eliminates private-attribute coupling, makes the wiring unconditional (no engine-existence guard needed), and keeps singleton identity across scheduler and engine paths — the exact invariant Slice 2's demo gate must prove (`get_trade_store() is engine.trade_store is scheduler.trade_store`)."
+}

@@ -1,0 +1,77 @@
+{
+  "issues": [
+    {
+      "id": "AR-001",
+      "severity": "MAJOR",
+      "category": "scope_creep",
+      "anchor_row": "Skill canonical paths",
+      "description": "The row hard-codes four workflow skills and user-local ~/.claude paths. The bounded N1+N2+N4 task facts only require changes around app/core/dependencies.py and app/services/whale_orchestrator.py, so this adds execution requirements outside the requested fix scope.",
+      "fix_proposed": "Remove the binding skill/path requirement from the anchor table or make it non-binding context; keep the anchor rows limited to the bounded code and test behavior."
+    },
+    {
+      "id": "AR-002",
+      "severity": "MINOR",
+      "category": "scope_creep",
+      "anchor_row": "Command paths",
+      "description": "The row anchors /tracer-feature, /plan-hardened, /refactor, and /fix-until-green orchestration choices. Those are workflow decisions not required by the N1, N2, or N4 facts and can turn a bounded implementation task into a tool-routing task.",
+      "fix_proposed": "Restrict the row to the command actually driving execution, or remove command routing from immutable anchors."
+    },
+    {
+      "id": "AR-003",
+      "severity": "MAJOR",
+      "category": "ambiguous",
+      "anchor_row": "File scope per slice",
+      "description": "Slice N2 is scoped as app/core/dependencies.py + tests, while N1 and N4 name mirrored test globs. The unqualified tests scope is ambiguous and can authorize unrelated test edits despite the OFF-LIMITS row rejecting tests outside the mirroring convention.",
+      "fix_proposed": "Bound N2 tests to the same mirrored dependencies test path pattern used for N1, or state the exact allowed N2 test file/glob."
+    },
+    {
+      "id": "AR-004",
+      "severity": "MAJOR",
+      "category": "edge_case",
+      "anchor_row": "Demo gate semantics",
+      "description": "The gate requires module pytest, diff size, and smoke import, but it does not require proving the N2 race/order invariant: scheduler-started orchestrators and get_execution_engine must share the same TradeStore whether scheduler starts before engine or engine initializes first. A smoke import can pass while the lazy-store race remains.",
+      "fix_proposed": "Tighten the existing gate text so dependencies tests must cover both initialization orders and singleton identity for get_trade_store/get_execution_engine/start_intelligence_scheduler."
+    },
+    {
+      "id": "AR-005",
+      "severity": "MAJOR",
+      "category": "unauthorized",
+      "anchor_row": "Demo gate semantics",
+      "description": "The row adds a hard diff-size gate of less than 30 LOC as a pass condition. The user facts bound the behavioral fixes but do not authorize rejecting a correct fix because it exceeds an arbitrary line count, especially with tests or existing local structure.",
+      "fix_proposed": "Make diff size an advisory scope check rather than a mandatory gate, or remove the numeric LOC threshold."
+    },
+    {
+      "id": "AR-006",
+      "severity": "MINOR",
+      "category": "ambiguous",
+      "anchor_row": "Inter-slice gate",
+      "description": "The trigger uses undefined terms such as DONE_WITH_CONCERNS and 'anchor file dependencies.py'. It is unclear who sets that state, whether any edit to dependencies.py triggers the gate, and how this interacts with the N1 then N2 sequence that necessarily edits the same file.",
+      "fix_proposed": "Define the trigger in concrete terms within the row: exactly when the gate runs between N1 and N2 and what condition counts as a concern."
+    },
+    {
+      "id": "AR-007",
+      "severity": "MINOR",
+      "category": "unauthorized",
+      "anchor_row": "Behavior change rule",
+      "description": "For N4, the row says the corrected whale size/USD behavior is observable via metric/log. The task only asks to fix the heuristic in whale_orchestrator.py:221-228; requiring metrics or logs would add an unrequested observable surface.",
+      "fix_proposed": "Phrase N4 observability in terms of corrected parsing/classification behavior and tests, without implying new metric or log output."
+    },
+    {
+      "id": "AR-008",
+      "severity": "MAJOR",
+      "category": "unauthorized",
+      "anchor_row": "Recovery budget",
+      "description": "The row authorizes rollback git on the slice and escalation to a planning-specialist after three failed recovery iterations. Rollback and external escalation are not part of the bounded N1+N2+N4 task and could discard unrelated local work if applied mechanically.",
+      "fix_proposed": "Remove automatic rollback and planning-specialist escalation from the anchor; limit recovery behavior to reporting failure state and evidence."
+    },
+    {
+      "id": "AR-009",
+      "severity": "MINOR",
+      "category": "ambiguous",
+      "anchor_row": "Single-slice-per-blocker",
+      "description": "The row says ordering is N1->N2->N4, but also says N4 is disjoint and 'parallelizzabile o ultimo per safety'. That leaves execution ordering ambiguous for the same immutable anchor table.",
+      "fix_proposed": "Choose one execution rule for N4 in the row: either explicitly last or explicitly allowed in parallel with N1/N2 under the stated file-scope separation."
+    }
+  ],
+  "summary": "The main risks are workflow scope creep, an under-specified N2 race/order gate, and several unauthorized process controls such as hard LOC limits and git rollback. The bounded code anchors are present, but several rows mix implementation facts with tool-routing and recovery decisions not requested by the N1+N2+N4 task."
+}
