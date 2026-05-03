@@ -1130,3 +1130,269 @@ class TestRiskKBIntegration:
         # Tick should complete normally despite KB errors
         assert result.signals_generated == 1
         assert result.orders_placed == 1
+
+
+# --- BUG-1 dedup hardening regression tests (commit d0c8c36) ---
+
+
+class _CountingGetPositionsExecutor(FakeExecutor):
+    """Executor whose get_positions() can be configured per-call.
+
+    side_effects is a list consumed in order; each entry is either a list of
+    Positions to return, or an Exception instance to raise. Records the number
+    of get_positions() calls in self.calls.
+    """
+
+    def __init__(
+        self,
+        side_effects: list[list[Position] | Exception],
+        balance: float = 150.0,
+    ) -> None:
+        super().__init__(balance=balance)
+        self._side_effects = list(side_effects)
+        self.calls = 0
+
+    async def get_positions(self) -> list[Position]:
+        self.calls += 1
+        if not self._side_effects:
+            return []
+        effect = self._side_effects.pop(0)
+        if isinstance(effect, Exception):
+            raise effect
+        return list(effect)
+
+
+class _AlwaysRaisingPositionsExecutor(FakeExecutor):
+    """get_positions() always raises. Records call count."""
+
+    def __init__(self, exc: Exception, balance: float = 150.0) -> None:
+        super().__init__(balance=balance)
+        self._exc = exc
+        self.calls = 0
+
+    async def get_positions(self) -> list[Position]:
+        self.calls += 1
+        raise self._exc
+
+
+class _SpyStrategy(FakeStrategy):
+    """FakeStrategy that records whether evaluate() was called.
+
+    Uses the default name "fake_strategy" so it falls under the autouse
+    yaml-config fixture's enabled list — see tests/test_execution/conftest.py.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(name="fake_strategy")
+        self.evaluate_calls = 0
+
+    async def evaluate(  # type: ignore[override]
+        self,
+        market: Market,
+        valuation: ValuationResult,
+        knowledge: object = None,
+    ) -> Signal | None:
+        self.evaluate_calls += 1
+        return await super().evaluate(market, valuation, knowledge)
+
+
+class TestDedupGuardFailClosed:
+    """Regression tests for BUG-1 dedup BUY guard hardening (commit d0c8c36).
+
+    Before the fix, a transient ``executor.get_positions()`` failure caused
+    the engine to fail OPEN: the dedup set would silently be empty and any
+    BUY signal would slip through, including ones for tokens already held
+    (causing duplicate consecutive bets — the original BUG-1 symptom).
+
+    After the fix, ``_fetch_open_position_token_ids`` retries up to 3 times
+    with 100ms backoff. On exhaustion it returns ``None`` and ``tick()``
+    skips the entire signal-generation phase (fail CLOSED).
+    """
+
+    async def test_fetch_open_position_token_ids_succeeds_first_try(self) -> None:
+        executor = _CountingGetPositionsExecutor(
+            side_effects=[
+                [
+                    Position(
+                        market_id="mkt-1",
+                        token_id="t1",
+                        side=OrderSide.BUY,
+                        size=10.0,
+                        avg_price=0.50,
+                    ),
+                    Position(
+                        market_id="mkt-1",
+                        token_id="t2",
+                        side=OrderSide.BUY,
+                        size=0.0005,  # below MIN_OPEN_POSITION_SIZE → dust
+                        avg_price=0.50,
+                    ),
+                ]
+            ]
+        )
+        engine = _make_engine(executor=executor)
+
+        result = await engine._fetch_open_position_token_ids()
+
+        assert result == {"t1"}  # t2 filtered as dust
+        assert executor.calls == 1
+
+    async def test_fetch_open_position_token_ids_recovers_on_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spy on asyncio.sleep imported in the engine module to assert backoff
+        sleep_calls: list[float] = []
+
+        async def spy_sleep(seconds: float) -> None:
+            sleep_calls.append(seconds)
+
+        from app.execution import engine as engine_module
+        monkeypatch.setattr(engine_module.asyncio, "sleep", spy_sleep)
+
+        executor = _CountingGetPositionsExecutor(
+            side_effects=[
+                RuntimeError("transient"),
+                [
+                    Position(
+                        market_id="mkt-1",
+                        token_id="t1",
+                        side=OrderSide.BUY,
+                        size=5.0,
+                        avg_price=0.50,
+                    )
+                ],
+            ]
+        )
+        engine = _make_engine(executor=executor)
+
+        result = await engine._fetch_open_position_token_ids()
+
+        assert result == {"t1"}
+        assert executor.calls == 2
+        # Exactly one sleep between attempt 1 (failure) and attempt 2 (success)
+        assert sleep_calls == [0.1]
+
+    async def test_fetch_open_position_token_ids_returns_none_after_exhaustion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleep_calls: list[float] = []
+
+        async def spy_sleep(seconds: float) -> None:
+            sleep_calls.append(seconds)
+
+        from app.execution import engine as engine_module
+        monkeypatch.setattr(engine_module.asyncio, "sleep", spy_sleep)
+
+        executor = _AlwaysRaisingPositionsExecutor(
+            exc=RuntimeError("permanent")
+        )
+        engine = _make_engine(executor=executor)
+
+        result = await engine._fetch_open_position_token_ids()
+
+        assert result is None
+        assert executor.calls == 3
+        # Sleeps occur between attempts only — not after the final failure
+        assert sleep_calls == [0.1, 0.1]
+
+    async def test_tick_skips_signals_when_dedup_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Speed up the test by stubbing asyncio.sleep used by the helper
+        from app.execution import engine as engine_module
+        monkeypatch.setattr(engine_module.asyncio, "sleep", _no_sleep)
+
+        spy = _SpyStrategy()
+        registry = StrategyRegistry()
+        registry.register(spy)  # type: ignore[arg-type]
+
+        # _manage_positions calls get_positions() once BEFORE the dedup
+        # guard. Allow that call to succeed (no positions to manage) so the
+        # tick reaches the guard; subsequent calls (the dedup retries) all
+        # raise — exhausting retries → fail CLOSED.
+        executor = _CountingGetPositionsExecutor(
+            side_effects=[
+                [],  # call 1: _manage_positions (no positions)
+                RuntimeError("attempt 1 broken"),
+                RuntimeError("attempt 2 broken"),
+                RuntimeError("attempt 3 broken"),
+            ]
+        )
+        engine = _make_engine(executor=executor, registry=registry)
+
+        result = await engine.tick(markets=[_make_market()])
+
+        # Signal generation phase was skipped entirely
+        assert result.signals_generated == 0
+        assert result.orders_placed == 0
+        # Strategy.evaluate() must NOT have been invoked under fail-closed
+        assert spy.evaluate_calls == 0
+        # An error was recorded for observability
+        assert any(
+            "dedup" in err.lower() or "signals_skipped" in err.lower()
+            for err in result.errors
+        ), f"expected dedup-skip error in {result.errors}"
+        # 1 from _manage_positions + 3 retries from dedup helper = 4
+        assert executor.calls == 4, (
+            f"expected 4 get_positions calls "
+            f"(1 from _manage_positions + 3 retries from dedup helper), "
+            f"got {executor.calls}"
+        )
+
+    async def test_tick_executes_normally_when_dedup_succeeds(self) -> None:
+        """Positive control: with a working get_positions(), held tokens are
+        filtered and fresh tokens go through. Mixes one held + one fresh
+        token in the same tick to verify per-token dedup precision.
+
+        Uses MultiSignalStrategy (already in the autouse-enabled list) which
+        emits 2 BUYs per market on tok-yes / tok-no — held_token = "tok-yes"
+        so only the tok-no leg should pass.
+        """
+        executor = _PositionHoldingExecutor(
+            positions=[
+                Position(
+                    market_id="mkt-1",
+                    token_id="tok-yes",  # held → leg 1 dropped
+                    side=OrderSide.BUY,
+                    size=5.0,
+                    avg_price=0.40,
+                )
+            ]
+        )
+        registry = StrategyRegistry()
+        registry.register(MultiSignalStrategy())  # type: ignore[arg-type]
+        engine = _make_engine(executor=executor, registry=registry)
+        market = _make_market()
+
+        result = await engine.tick(markets=[market])
+
+        # Of the 2 BUYs MultiSignalStrategy emits, only tok-no passes
+        # (tok-yes is held → dropped).
+        assert result.signals_generated == 1
+        assert result.orders_placed == 1
+        assert len(executor._orders) == 1
+        assert executor._orders[0].token_id == "tok-no"
+
+    def test_min_open_position_size_constant_applied_at_fully_closed(self) -> None:
+        """The MIN_OPEN_POSITION_SIZE constant must be referenced in
+        _manage_positions for the fully_closed exit detection (so the dust
+        threshold stays in sync with the dedup guard).
+        """
+        import inspect
+
+        from app.execution import engine as engine_module
+
+        source = inspect.getsource(engine_module.ExecutionEngine._manage_positions)
+        assert "MIN_OPEN_POSITION_SIZE" in source, (
+            "_manage_positions must use MIN_OPEN_POSITION_SIZE constant "
+            "for the fully_closed check (no magic 0.001)"
+        )
+        # Sanity: the constant exists at module level with the documented value
+        assert engine_module.MIN_OPEN_POSITION_SIZE == 0.001
+
+
+async def _no_sleep(seconds: float) -> None:
+    """Drop-in replacement for asyncio.sleep used by tests that don't want
+    real backoff delays slowing down the suite.
+    """
+    return None
