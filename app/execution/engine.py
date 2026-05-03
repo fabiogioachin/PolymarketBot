@@ -39,6 +39,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Minimum position size to consider a position "open" (filters out dust
+# from float rounding in fills). Used both for the dedup BUY guard and
+# the fully_closed exit detection so the two stay in sync.
+MIN_OPEN_POSITION_SIZE = 0.001
+
 
 @dataclass
 class TickResult:
@@ -200,51 +205,56 @@ class ExecutionEngine:
         # Strategies are stateless w.r.t. portfolio; without this guard, the same
         # BUY signal would re-fire every tick and merge into the existing position
         # (avg_price drift), surfacing as identical consecutive bets in the log.
-        open_position_token_ids: set[str] = set()
-        try:
-            for pos in await self._executor.get_positions():
-                if pos.size > 0.001:
-                    open_position_token_ids.add(pos.token_id)
-        except Exception as exc:
-            logger.warning("dedup_position_fetch_failed", error=str(exc))
+        # Fail CLOSED: if we can't determine the open-position set after retries,
+        # skip the signal-generation phase entirely rather than risk duplicate BUYs.
+        open_position_token_ids = await self._fetch_open_position_token_ids()
 
         # 5. Generate new signals (with market reference for horizon)
         signal_market_pairs: list[tuple[Signal, Market]] = []
-        for market in markets:
-            valuation = valuations.get(market.id)
-            if not valuation:
-                continue
+        if open_position_token_ids is None:
+            logger.warning(
+                "signals_skipped_dedup_unavailable",
+                reason="get_positions failed after retries; skipping signal generation",
+            )
+            result.errors.append(
+                "signals_skipped_dedup_unavailable: get_positions exhausted retries"
+            )
+        else:
+            for market in markets:
+                valuation = valuations.get(market.id)
+                if not valuation:
+                    continue
 
-            # Skip markets that were just exited this tick (prevent buy-sell-rebuy loop)
-            if market.id in exited_market_ids:
-                continue
+                # Skip markets that were just exited this tick (prevent buy-sell-rebuy loop)
+                if market.id in exited_market_ids:
+                    continue
 
-            applicable_strategies = self._strategies.get_for_domain(market.category.value)
-            for strategy in applicable_strategies:
-                try:
-                    result_signals = await strategy.evaluate(market, valuation)
-                    if result_signals is None:
-                        continue
-                    if isinstance(result_signals, Signal):
-                        result_signals = [result_signals]
-                    for sig in result_signals:
-                        if sig.signal_type == SignalType.HOLD:
+                applicable_strategies = self._strategies.get_for_domain(market.category.value)
+                for strategy in applicable_strategies:
+                    try:
+                        result_signals = await strategy.evaluate(market, valuation)
+                        if result_signals is None:
                             continue
-                        # Drop BUYs on tokens we already hold (BUG-1 dedup guard)
-                        if (
-                            sig.signal_type == SignalType.BUY
-                            and sig.token_id in open_position_token_ids
-                        ):
-                            logger.info(
-                                "signal_dropped_duplicate_position",
-                                market_id=sig.market_id,
-                                token_id=sig.token_id[:20],
-                                strategy=sig.strategy,
-                            )
-                            continue
-                        signal_market_pairs.append((sig, market))
-                except Exception as e:
-                    result.errors.append(f"{strategy.name}: {e}")
+                        if isinstance(result_signals, Signal):
+                            result_signals = [result_signals]
+                        for sig in result_signals:
+                            if sig.signal_type == SignalType.HOLD:
+                                continue
+                            # Drop BUYs on tokens we already hold (BUG-1 dedup guard)
+                            if (
+                                sig.signal_type == SignalType.BUY
+                                and sig.token_id in open_position_token_ids
+                            ):
+                                logger.info(
+                                    "signal_dropped_duplicate_position",
+                                    market_id=sig.market_id,
+                                    token_id=sig.token_id[:20],
+                                    strategy=sig.strategy,
+                                )
+                                continue
+                            signal_market_pairs.append((sig, market))
+                    except Exception as e:
+                        result.errors.append(f"{strategy.name}: {e}")
 
         result.signals_generated = len(signal_market_pairs)
 
@@ -379,6 +389,39 @@ class ExecutionEngine:
 
         return result
 
+    async def _fetch_open_position_token_ids(self) -> set[str] | None:
+        """Returns set of token_ids with open positions, or None on persistent failure.
+
+        Retries up to 3 times with 100ms backoff between attempts to absorb
+        transient failures (e.g. brief network blips in live mode). On
+        exhaustion, returns ``None`` so the caller can fail CLOSED — i.e.
+        skip signal generation rather than risk duplicate BUYs from an
+        empty dedup set.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                positions = await self._executor.get_positions()
+                return {
+                    pos.token_id
+                    for pos in positions
+                    if pos.size > MIN_OPEN_POSITION_SIZE
+                }
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "dedup_position_fetch_attempt_failed",
+                    attempt=attempt,
+                    error=str(exc),
+                )
+                if attempt < 3:
+                    await asyncio.sleep(0.1)
+        logger.error(
+            "dedup_position_fetch_exhausted",
+            error=str(last_exc) if last_exc else "unknown",
+        )
+        return None
+
     async def _manage_positions(
         self,
         market_by_id: dict[str, Market],
@@ -493,7 +536,9 @@ class ExecutionEngine:
                 if order_result.status == OrderStatus.FILLED:
                     # P&L realized by the CLOB client's _reduce_position
                     realized = (order_result.price - pos.avg_price) * order_result.filled_size
-                    fully_closed = order_result.filled_size >= original_size - 0.001
+                    fully_closed = (
+                        order_result.filled_size >= original_size - MIN_OPEN_POSITION_SIZE
+                    )
                     result.realized_pnl += realized
                     self._circuit_breaker.record_trade_result(realized)
 
