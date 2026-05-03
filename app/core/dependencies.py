@@ -402,7 +402,33 @@ async def start_intelligence_scheduler() -> IntelligenceScheduler:
         scheduler.set_leaderboard_orchestrator(get_leaderboard_orchestrator())
 
     if app_config.dss.snapshot_writer.enabled:
-        scheduler.set_snapshot_writer(get_snapshot_writer())
+        snapshot_writer = get_snapshot_writer()
+        scheduler.set_snapshot_writer(snapshot_writer)
+
+        # Phase 13 W5 Slice 1: wire SnapshotWriter runtime deps for
+        # monitoring-only mode (bot.auto_start=False), where
+        # get_execution_engine() is never invoked from lifespan.
+        # Setters are idempotent (late-binding) so re-invocation in
+        # full-bot mode is safe (no double-wiring bug).
+        # Engine: only propagate if already built — do NOT force-construct.
+        if _execution_engine is not None:
+            snapshot_writer.set_engine(_execution_engine)
+            # TradeStore is built inside get_execution_engine; if engine
+            # exists, propagate its store. Otherwise skip (writer
+            # tolerates None — independent store construction is N2/Slice 2).
+            store = getattr(_execution_engine, "_store", None)
+            if store is not None:
+                snapshot_writer.set_trade_store(store)
+        if app_config.intelligence.whale.enabled:
+            snapshot_writer.set_whale_orchestrator(get_whale_orchestrator())
+        if app_config.intelligence.popular_markets.enabled:
+            snapshot_writer.set_popular_markets_orchestrator(
+                get_popular_markets_orchestrator()
+            )
+        if app_config.intelligence.leaderboard.enabled:
+            snapshot_writer.set_leaderboard_orchestrator(
+                get_leaderboard_orchestrator()
+            )
 
     await scheduler.start()
     return scheduler
